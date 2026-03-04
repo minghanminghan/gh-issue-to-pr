@@ -55,6 +55,7 @@ class PipelineState(BaseModel):
     ci_status: Optional[CIStatus] = None
     commit_sha: Optional[str] = None
     pr_url: Optional[str] = None
+    container_id: Optional[str] = None
     cost_budget_usd: float = 2.00
     cost_spent_usd: float = 0.0
     read_only: list[str] = Field(default_factory=lambda: list(DEFAULT_READ_ONLY))

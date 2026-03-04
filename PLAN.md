@@ -202,3 +202,91 @@ I want to build a series of agents that read through github issues for a repo an
 - **Secrets exposure**: `.env*` and credential files must be in `read_only` by default. The allowlist on execute_cli reduces but doesn't eliminate risk.
 - **Test suite absence**: Some repos have no tests. Test agent must handle this gracefully (write TEST.md noting absence, don't fail).
 - **Large repos**: Plan agent may hit context limits scanning a large repo. FILES.md scoping is the primary mitigation; may need chunked grep strategies.
+
+
+# Phase 6: Code Sandboxing (Docker)
+
+In Step 0 (Setup), start a Docker container with the repo mounted at `/workspace`. Code execution commands (python, pytest, ruff, mypy, node, cargo, npm) route through `docker exec` inside the container. git and gh commands always run on the host. The container is torn down in Step 6 (Report).
+
+## 0. Setup (updated)
+- After branch creation and STATE.json initialisation, call `start_container(repo_root)` and `install_project_deps()`
+- If Docker is not installed: print warning to stderr, continue without sandbox (soft-fail)
+- Write `container_id` to STATE.json when a container is started
+
+## Steps
+
+**6.1 — `tools/docker.py`** (new file)
+- `start_container(repo_root, image="python:3.11-slim") -> str | None`
+- `stop_container(container_id: str) -> None`
+- `install_project_deps(container_id, repo_root) -> None`
+- Verification: `python -c "from tools.docker import start_container, stop_container; print('ok')"`
+
+**6.2 — `schemas/state.py`**
+- Add `container_id: Optional[str] = None` to `PipelineState`
+- Verification: `python -c "from schemas.state import PipelineState; assert PipelineState(repo_url='r', local_dir='/t', issue_url='i').container_id is None"`
+
+**6.3 — `tools/setup.py`**
+- After step 5, start container and save `container_id` to STATE.json
+
+**6.4 — `tools/shell.py`**
+- Add `SANDBOX_BINARIES` frozenset: `{python, node, cargo, npm, pytest, ruff, mypy}`
+- Add `HOST_BINARIES` frozenset: `{git, gh}`
+- Add `container_id: Optional[str] = None` param to `execute_cli()`
+- When `container_id` set and binary in `SANDBOX_BINARIES`: prepend `docker exec --workdir /workspace <container_id>`
+- Verification: `pytest tests/test_tools.py -v` — passes with default `container_id=None`
+
+**6.5 — `agents/execute.py`, `agents/validate.py`, `agents/test_agent.py`**
+- Read `state.container_id` and pass to `execute_cli` closure in each agent
+
+**6.6 — `tools/report.py`**
+- Call `stop_container(state.container_id)` before `close_trace()` on both pass and fail
+
+### Phase 6 Tests
+- `tests/test_docker.py`: docker availability detection; container start/stop/soft-fail; dep install skip/run/warn; `SANDBOX_BINARIES`/`HOST_BINARIES` membership; `execute_cli` sandbox routing; `container_id` round-trips through STATE.json; report calls `stop_container`
+
+
+# Phase 7: Web Server
+
+Expose the pipeline via HTTP. No changes to existing pipeline logic.
+
+## Endpoints
+
+- `GET /health` → `{"status": "ok", "version": "0.1.0"}`
+- `POST /issue` → run pipeline, return result
+
+### Request schema
+```json
+{ "issue_url": str, "repo_url": str, "local_path": str|null, "guidelines": str|null, "budget": float }
+```
+
+### Response schema
+```json
+{ "run_dir": str, "outcome": "pass"|"fail", "pr_url": str|null, "cost_spent_usd": float, "loop_count": int }
+```
+
+## Steps
+
+**7.1 — `pyproject.toml`**
+- Add `fastapi>=0.110.0` and `uvicorn[standard]>=0.29.0` to runtime dependencies
+
+**7.2 — `server.py`** (new file, project root)
+- FastAPI app with `GET /health` and `POST /issue`
+- Inline `guidelines` string written to tempfile; cleaned up in `finally`
+- `except SystemExit` converts `run_report`'s `sys.exit(1)` → `outcome="fail"`, HTTP 200
+- Unhandled exceptions → HTTP 500
+
+**7.3 — `main.py`** (restructured)
+- Add argparse subparsers:
+  - `run <issue_url> <repo_url> [--local-path] [--guidelines] [--budget]`
+  - `serve [--host 127.0.0.1] [--port 8080]`
+- Verification: `python main.py --help` shows both subcommands
+
+### Phase 7 Tests
+- `tests/test_server.py` using `fastapi.testclient.TestClient`:
+  - `GET /health` → 200, correct body
+  - Missing fields / budget ≤ 0 → 422
+  - Mocked pipeline returning run_dir → 200, correct outcome and fields
+  - `SystemExit(1)` → 200, `outcome="fail"`
+  - `RuntimeError` → 500
+  - Guidelines tempfile creation and cleanup
+  - `_serve_subcommand` calls `uvicorn.run`

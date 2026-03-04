@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from schemas.state import Step
+from tools.docker import install_project_deps, start_container
 from tools.state import init_run, read_state, write_state, _run_hash
 from tools.trace import open_trace
 
@@ -63,6 +64,16 @@ def run_setup(
     state.issue_body = issue_body
     state.current_step = Step.plan
     write_state(run_dir, state)
+
+    # ------------------------------------------------------------------ #
+    # 6. Start Docker sandbox (optional — no-op if docker not found)
+    # ------------------------------------------------------------------ #
+    container_id = start_container(repo_root)
+    if container_id:
+        install_project_deps(container_id, repo_root)
+        state = read_state(run_dir)
+        state.container_id = container_id
+        write_state(run_dir, state)
 
     return run_dir
 

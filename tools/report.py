@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from tools.docker import stop_container
 from tools.state import read_state
 from tools.trace import close_trace
 
@@ -24,6 +25,11 @@ def run_report(run_dir: Path, outcome: str) -> None:
         state = read_state(run_dir)
     except Exception:
         state = None
+
+    # Tear down Docker sandbox (always, before writing artifacts)
+    container_id = getattr(state, "container_id", None) if state else None
+    if container_id:
+        stop_container(container_id)
 
     # Close trace (writes TRACE.json)
     close_trace(run_dir, outcome)

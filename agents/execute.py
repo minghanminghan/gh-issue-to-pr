@@ -46,6 +46,8 @@ def run_execute_agent(
     files_md = files_md_path.read_text(encoding="utf-8") if files_md_path.exists() else ""
     allowed_files = _parse_files_md(files_md, repo_root)
 
+    container_id = state.container_id
+
     # Also allow writing CHANGES.md in run_dir
     allowed_run_files = {str(run_dir / "CHANGES.md")}
 
@@ -81,7 +83,7 @@ def run_execute_agent(
         return {"ok": False, "output": "", "error": f"'{path}' is not in FILES.md."}
 
     def _execute_cli(cmd: str):
-        return execute_cli(cmd, DEFAULT_ALLOWLIST, cwd=repo_root)
+        return execute_cli(cmd, DEFAULT_ALLOWLIST, cwd=repo_root, container_id=container_id)
 
     handlers = {
         "read_file": lambda path: read_file(path, repo_root=repo_root),
