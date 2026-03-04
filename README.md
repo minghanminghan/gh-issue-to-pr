@@ -13,19 +13,19 @@ Setup → Plan → Execute ↔ Validate → Test → Summary → Report
 
 | Step | Type | What it does |
 |------|------|------|
-| **0 Setup** | Deterministic | Fetches issue via `gh`, clones/verifies repo, creates `agent/<hash>` branch, starts Docker sandbox, writes `ISSUE.md` and `STATE.json` |
+| **0 Setup** | Deterministic | Fetches issue via `gh`, clones/verifies repo, creates `agent/<hash>` branch (force-resets if it already exists), writes `ISSUE.md` and `STATE.json` |
 | **1 Plan** | Agent | Reads the issue and repo, writes `PLAN.md` (ordered change list with verification commands) and `FILES.md` (files to modify) |
 | **2 Execute** | Agent | Translates `PLAN.md` into code changes, documents justifications in `CHANGES.md` |
 | **3 Validate** | Agent | Runs verification commands from `PLAN.md`, checks code against spec, writes verdict to `VALIDATE.md` |
 | **4 Test** | Agent | Runs existing tests, appends new tests as needed, commits on success |
 | **5 Summary** | Agent | Squash-rebases, creates/force-pushes PR, polls CI, writes `SUMMARY.md` |
-| **6 Report** | Deterministic | Tears down Docker sandbox, writes `TRACE.json`, `FAILURE.md` on failure, exports to Arize Phoenix if configured |
+| **6 Report** | Deterministic | Writes `TRACE.json`, `FAILURE.md` on failure, exports to Arize Phoenix if configured |
 
 ### Loop control
 
 When validation or tests fail, the pipeline loops back rather than aborting:
 
-- **`minor` / `spec_deviation`** — retry in the local Execute ↔ Validate cycle (cap: 2 attempts)
+- **`minor` / `spec_deviation`** — retry in the local Execute ↔ Validate cycle (cap: 2 retries, 3 total attempts)
 - **`plan_invalid`** — loop back to Plan with failure context injected (global loop cap: 3)
 - **`unrecoverable`** — route straight to Report
 - **Budget exceeded** — route straight to Report
@@ -41,7 +41,6 @@ On any loop-back, the agent that failed writes a report to its artifact file, an
 - **[gh CLI](https://cli.github.com/)** — authenticated (`gh auth login`)
 - **`ANTHROPIC_API_KEY`** environment variable set
 - Git installed and the target repo must be either cloned locally (clean working tree) or accessible for cloning
-- **[Docker](https://docs.docker.com/get-docker/)** — optional but recommended; code execution is sandboxed when available
 
 ---
 
@@ -112,7 +111,7 @@ python main.py serve --host 0.0.0.0 --port 9000
 
 ### HTTP API
 
-Once the server is running, two endpoints are available:
+Once the server is running, three endpoints are available:
 
 #### `GET /health`
 
@@ -123,7 +122,7 @@ curl http://127.0.0.1:8080/health
 
 #### `POST /issue`
 
-Runs the full pipeline synchronously. Returns `200` regardless of pipeline outcome (check the `outcome` field); returns `422` for invalid input and `500` for unexpected server errors.
+Accepts a pipeline job and runs it in the background. Returns `202 Accepted` immediately with a polling URL; returns `422` for invalid input.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/issue \
@@ -133,7 +132,10 @@ curl -X POST http://127.0.0.1:8080/issue \
     "repo_url": "https://github.com/owner/repo",
     "budget": 3.00
   }'
+# {"issue_url":"https://...","status_url":"/status?issue=https://..."}
 ```
+
+If a job for the same `issue_url` is already queued or running, the server returns 202 pointing to the existing status URL without starting a new run.
 
 **Request body:**
 
@@ -145,30 +147,31 @@ curl -X POST http://127.0.0.1:8080/issue \
 | `guidelines` | string | No | Contribution guidelines as an inline string |
 | `budget` | float | No | Cost cap in USD (default: `2.00`, must be > 0) |
 
+**Response body (202):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `issue_url` | string | The submitted issue URL |
+| `status_url` | string | Path to poll for status, e.g. `/status?issue=<url>` |
+
+#### `GET /status`
+
+Poll this endpoint after `POST /issue`. Returns `404` if no job has been submitted for the given URL.
+
+```bash
+curl "http://127.0.0.1:8080/status?issue=https://github.com/owner/repo/issues/42"
+```
+
 **Response body:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `run_dir` | string | Path to the `.agent/<hash>/` run directory |
-| `outcome` | string | `"pass"` or `"fail"` |
-| `pr_url` | string \| null | GitHub PR URL, if created |
-| `cost_spent_usd` | float | Total cost spent in USD |
-| `loop_count` | int | Number of global plan→execute→validate→test loops |
-
----
-
-## Code sandbox (Docker)
-
-When Docker is available, agent code execution is isolated in a container:
-
-- **Setup** starts a `python:3.11-slim` container with the repo mounted at `/workspace` and runs `pip install -e .` inside it.
-- Commands like `python`, `pytest`, `ruff`, `mypy`, `node`, `cargo`, `npm` run inside the container via `docker exec`.
-- `git` and `gh` always run on the host (version control stays outside the sandbox).
-- **Report** stops and removes the container at the end of every run, regardless of outcome.
-
-If Docker is not installed, the pipeline prints a warning and continues without sandboxing — no configuration needed.
-
-To use a different base image, the `start_container` function in `tools/docker.py` accepts an `image` parameter (default: `python:3.11-slim`).
+| `status` | string | `"queued"`, `"running"`, `"completed"`, or `"failed"` |
+| `issue_url` | string | The issue URL |
+| `run_dir` | string \| null | Path to the `.agent/<hash>/` run directory once known |
+| `outcome` | string \| null | `"pass"` or `"fail"` once complete |
+| `error` | string \| null | Error message if an unexpected exception occurred |
+| `state` | object \| null | Full `STATE.json` contents once a run directory is available |
 
 ---
 
@@ -203,8 +206,7 @@ Key fields you can inspect or override:
 | `cost_budget_usd` | `2.00` | Hard cap — pipeline halts if `cost_spent_usd` reaches this before any agent call |
 | `read_only` | See below | Glob patterns of files agents may never write |
 | `loop_count` | `0` | Global plan→execute→validate→test loop count |
-| `local_loop_count` | `0` | Execute↔Validate retry count within a single global iteration |
-| `container_id` | `null` | Docker container ID for the current run; `null` if Docker is unavailable |
+| `local_loop_count` | `0` | Execute↔Validate retry count within a single global iteration (cap: 2 retries, 3 total) |
 
 ### Default `read_only` patterns
 
@@ -245,25 +247,21 @@ If `PHOENIX_COLLECTOR_ENDPOINT` is set, the full trace is exported via OTLP to a
 
 ## Security model
 
-### Code sandbox
-
-When Docker is available, all code execution (python, pytest, ruff, mypy, node, cargo, npm) runs inside a container with the repo mounted read-write. This prevents agent-written code from affecting the host environment beyond the repo directory. git and gh always run on the host so that version control and GitHub operations work normally.
-
 ### Shell command allowlist
 
 Agents can only run commands from the following `(binary, args_prefix)` pairs:
 
-| Binary | Allowed args | Runs in |
-|--------|-------------|---------|
-| `python` | any | Container |
-| `node` | any | Container |
-| `cargo` | any | Container |
-| `npm` | any | Container |
-| `pytest` | any | Container |
-| `ruff` | `check`, `format` | Container |
-| `mypy` | any | Container |
-| `git` | `status`, `add`, `commit`, `rebase`, `push`, `branch`, `checkout`, `log` | Host |
-| `gh` | `issue`, `pr` | Host |
+| Binary | Allowed args |
+|--------|-------------|
+| `python` | any |
+| `node` | any |
+| `cargo` | any |
+| `npm` | any |
+| `pytest` | any |
+| `ruff` | `check`, `format` |
+| `mypy` | any |
+| `git` | `status`, `add`, `commit`, `rebase`, `push`, `branch`, `checkout`, `log` |
+| `gh` | `issue`, `pr` |
 
 Additionally, commands are rejected if they contain shell metacharacters (`;`, `|`, `&`, `$(`, `` ` ``) or `..` path components.
 
@@ -283,7 +281,7 @@ Setup creates `agent/<hash>` and fails loudly if the branch already exists. It w
 
 ## Testing
 
-The test suite uses `pytest` and requires no running services — all external calls (Claude API, `gh` CLI, git, Docker) are mocked.
+The test suite uses `pytest` and requires no running services — all external calls (Claude API, `gh` CLI, git) are mocked.
 
 ### Run all tests
 
@@ -301,72 +299,7 @@ uv run pytest -v
 
 ```bash
 uv run pytest tests/test_tools.py -v
-uv run pytest tests/test_docker.py -v
 uv run pytest tests/test_server.py -v
-```
-
-### Test suite overview
-
-| File | Tests | What it covers |
-|------|-------|----------------|
-| `tests/test_state.py` | 10 | `PipelineState` schema defaults, round-trip serialisation, `init_run`, gitignore mutation |
-| `tests/test_tools.py` | 22 | All `fs` tool primitives, shell allowlist checks, `execute_cli` safety |
-| `tests/test_manifests.py` | 11 | Per-agent tool manifests: correct schemas exported, forbidden tools absent per agent |
-| `tests/test_readonly.py` | 8 | Glob-based read-only enforcement for `.github/**`, `.env*`, `*.lock`, and exact filenames |
-| `tests/test_context.py` | 10 | Context block content, artifact injection on loop-back, truncation at 4000-token limit |
-| `tests/test_report.py` | 6 | Pass/fail outcomes, `FAILURE.md` field presence, `TRACE.json` written |
-| `tests/test_pipeline.py` | 3 | Orchestration logic with stubbed agents: all-pass, report-on-failure, budget-exceeded routing |
-| `tests/test_loop.py` | 3 | Global loop increment, max-loops → fail transition, `local_loop_count` reset on global retry |
-| `tests/test_docker.py` | 35 | Docker container lifecycle, sandbox binary routing, `container_id` state field, report teardown |
-| `tests/test_server.py` | 27 | `GET /health`, `POST /issue` validation/pass/fail, `SystemExit` interception, guidelines tempfile, CLI subcommands |
-
-### Expected output
-
-```
-144 passed in ~2s
-```
-
----
-
-## Project structure
-
-```
-gh-issue-to-pr/
-├── main.py                  # CLI entry point (subcommands: run, serve)
-├── pipeline.py              # Orchestrator: sequences steps, manages loops
-├── server.py                # FastAPI web server (GET /health, POST /issue)
-├── pyproject.toml           # uv project config and dependencies
-│
-├── agents/
-│   ├── base.py              # Streaming agentic loop (tool dispatch, cost tracking, span recording)
-│   ├── plan.py              # Plan agent
-│   ├── execute.py           # Execute agent
-│   ├── validate.py          # Validate agent
-│   ├── test_agent.py        # Test agent
-│   └── summary.py           # Summary agent
-│
-├── tools/
-│   ├── fs.py                # read_file, write_file, create_file, append_file, list_dir, grep
-│   ├── shell.py             # execute_cli with allowlist and Docker routing
-│   ├── docker.py            # Docker container lifecycle (start, stop, install deps)
-│   ├── state.py             # STATE.json read/write, init_run
-│   ├── setup.py             # Step 0: issue fetch, clone, branch creation, container start
-│   ├── report.py            # Step 6: container stop, FAILURE.md, TRACE.json, sys.exit
-│   ├── trace.py             # Span recording, TRACE.json, OTLP export
-│   ├── manifests.py         # Per-agent tool schema definitions
-│   ├── context.py           # Context block builder for loop-back prompts
-│   ├── logger.py            # JSON-lines event logger (RUN.log)
-│   └── eval.py              # LLM-as-judge scorer (per-agent rubrics)
-│
-├── schemas/
-│   └── state.py             # Pydantic PipelineState model, Step/FailureSource enums
-│
-├── tests/                   # pytest test suite (144 tests, no external deps)
-│
-├── docs/
-│   └── concerns.md          # Operational concerns and mitigations
-│
-└── runs/                    # Empty placeholder (run dirs live inside repo clones)
 ```
 
 ---
@@ -397,9 +330,8 @@ gh-issue-to-pr/
 
 See [docs/concerns.md](docs/concerns.md) for full details. In brief:
 
-- **Soft cost cap** — mid-agent cost spikes can exceed the budget before the next check
-- **Branch conflicts** — if `agent/<hash>` already exists from a prior run, the pipeline fails loudly and requires manual branch deletion
-- **Docker image language support** — the default `python:3.11-slim` image only covers Python projects; set a different image in `tools/docker.py` for Node, Rust, etc.
-- **Synchronous HTTP server** — `POST /issue` blocks until the pipeline completes; long runs will hold the connection open
+- **Soft cost cap** — mid-agent cost spikes can still exceed the budget between API responses; the check fires after each streamed response, not token-by-token
+- **Branch conflicts** — if `agent/<hash>` already exists, Setup force-deletes and recreates it; any uncommitted work on that branch will be lost
+- **In-memory job state** — the server stores job status in memory; restarting the server loses all pending/running job records
 - **Large repos** — the Plan agent may approach context limits on repos with >10K files; chunked grep strategies are not yet implemented
 - **`package-lock.json`** — the default `*.lock` pattern matches `yarn.lock`, `Pipfile.lock`, etc., but not `package-lock.json` (which ends in `.json`). Add `package-lock.json` to `read_only` manually if needed.

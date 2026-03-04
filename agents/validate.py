@@ -56,8 +56,6 @@ def run_validate_agent(run_dir: Path) -> AgentResult:
     state = read_state(run_dir)
     repo_root = _repo_root(run_dir)
 
-    container_id = state.container_id
-
     # Determine allowlist: only commands from PLAN.md verification steps
     plan_commands = _extract_verification_commands(run_dir / "PLAN.md")
     allowlist = _build_allowlist(plan_commands)
@@ -81,7 +79,7 @@ def run_validate_agent(run_dir: Path) -> AgentResult:
         return {"ok": False, "output": "", "error": "Validate agent may only write VALIDATE.md."}
 
     def _execute_cli_fn(cmd: str):
-        return execute_cli(cmd, allowlist, cwd=repo_root, container_id=container_id)
+        return execute_cli(cmd, allowlist, cwd=repo_root)
 
     handlers = {
         "read_file": lambda path: read_file(path, repo_root=repo_root),

@@ -81,8 +81,6 @@ def run_test_agent(run_dir: Path) -> AgentResult:
     state = read_state(run_dir)
     repo_root = _repo_root(run_dir)
 
-    container_id = state.container_id
-
     # Determine test files (for append-only enforcement)
     test_files = _find_test_files(repo_root)
 
@@ -96,7 +94,7 @@ def run_test_agent(run_dir: Path) -> AgentResult:
         return append_file(path, content, repo_root=repo_root, read_only=state.read_only)
 
     def _execute_cli_fn(cmd: str):
-        return execute_cli(cmd, _TEST_ALLOWLIST, cwd=repo_root, container_id=container_id)
+        return execute_cli(cmd, _TEST_ALLOWLIST, cwd=repo_root)
 
     user_prompt = "\n".join([
         "## Files changed\n",

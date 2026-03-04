@@ -243,7 +243,7 @@ def _run_local_loop(run_dir: Path) -> bool:
             return False
 
         # Check if we can continue the local loop
-        if state.local_loop_count < _LOCAL_LOOP_CAP - 1:
+        if state.local_loop_count < _LOCAL_LOOP_CAP:
             state.local_loop_count += 1
             write_state(run_dir, state)
             log_event(run_dir, "local_loop_retry", {"local_loop_count": state.local_loop_count})

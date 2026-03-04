@@ -52,14 +52,14 @@ The foundation everything else depends on. No agents yet — just the data model
 - Implement `tools/setup.py`: `run_setup(repo_url, issue_url) -> run_dir`
   - Fetch issue via `gh issue view <url> --json title,body,comments`; write to ISSUE.md in run dir
   - Clone repo if not already local, or verify local path is clean (no uncommitted changes)
-  - Create branch `agent/<hash>`; fail loudly if the branch already exists
+  - Create branch `agent/<hash>`; if it already exists, force-delete it and log to stderr before recreating
   - Populate STATE.json with `issue_body` and `branch_name` alongside all fields from `init_run`
 - Verification: calling `run_setup()` produces ISSUE.md with issue content, branch `agent/<hash>` exists, STATE.json has `branch_name` and `issue_body`
 
 ### Phase 1 Tests
 - `tests/test_state.py`: schema validation, read/write round-trip, init_run idempotency, hash collision (same issue URL always produces same path), `.gitignore` mutation, default `read_only` entries present
 - `tests/test_tools.py`: each fs and shell tool with success and failure cases; verify allowlist blocks disallowed commands; verify shell metacharacter and `..` rejection
-- `tests/test_setup.py`: branch creation, duplicate branch detection (fail loudly), ISSUE.md content written, STATE.json fields `branch_name` and `issue_body` populated
+- `tests/test_setup.py`: branch creation, duplicate branch force-reset (log + recreate), ISSUE.md content written, STATE.json fields `branch_name` and `issue_body` populated
 - `tests/test_manifests.py`: each agent's manifest produces correct tool schemas with no extra tools
 
 ---
@@ -84,14 +84,14 @@ The Python control flow that sequences agents, manages loops, and enforces stopp
   - `spec_deviation` → skip Plan; loop back to Execute only; inject VALIDATE.md via context injection (see 2.6)
   - `plan_invalid` → increment `loop_count`, set `failure_source` and `last_failure_reason`, return to Plan
   - `unrecoverable` → set `failure_source` and `last_failure_reason` in STATE.json; route to Report step (Report writes FAILURE.md and exits non-zero)
-- Check cost budget before every agent call: if `cost_spent_usd >= cost_budget_usd`, set `failure_source = budget_exceeded` and route to Report step
+- Check cost budget before every agent call AND mid-agent-stream after each API response: if `cost_spent_usd + running_cost >= cost_budget_usd`, set `failure_source = budget_exceeded` and route to Report step
 - FAILURE.md is always written by Report, never inline by the orchestrator
 - Verification: stub step 2 to always fail with `plan_invalid`; confirm pipeline routes to Report after 3 loops, FAILURE.md is written with correct fields; test `budget_exceeded` path with `cost_budget_usd=0`
 
 **2.3 — Local loop (execute ↔ validate)**
-- `minor` failures increment `local_loop_count`; allow up to 2 local exec↔validate cycles before escalating to global loop
+- `minor` failures increment `local_loop_count`; allow up to 2 retries (3 total attempts) per global iteration before escalating
 - Reset `local_loop_count` to 0 on every global loop-back
-- When `local_loop_count >= 2`, escalate by reclassifying as `plan_invalid` and triggering global loop
+- When `local_loop_count >= _LOCAL_LOOP_CAP` (cap=2), escalate by reclassifying as `plan_invalid` and triggering global loop
 - Verification: stub validate to emit `minor` twice then pass; confirm global `loop_count` stays at 0; stub validate to emit `minor` three times; confirm `loop_count` increments on escalation
 
 **2.4 — Read-only enforcement**
@@ -192,7 +192,7 @@ Implement the 5 agents as real LLM calls. Each agent gets its scoped tool manife
 - System prompt: role, PR formatting instructions
 - Tools: `read_file`, `list_dir`, `grep`, `execute_cli` (git rebase, git push --force-with-lease, gh pr create/view/checks)
 - Reads all prior markdown files (ISSUE.md, PLAN.md, CHANGES.md, VALIDATE.md, TEST.md)
-- Squash all commits on `agent/<hash>` into one via `git rebase -i origin/main` (non-interactive, all fixup)
+- Squash all commits on `agent/<hash>` into one via `git rebase --autosquash origin/main` (or `git reset --soft $(git merge-base HEAD origin/main)` + commit)
 - Conditional PR logic:
   - If `state.pr_url` is None: create PR via `gh pr create`; write URL to STATE.json
   - If `state.pr_url` exists (loop-back): force-push squashed commit via `git push --force-with-lease`; do not create a new PR
@@ -258,7 +258,7 @@ Run the full pipeline on real repos and fix what breaks.
 - Test: test agent finds zero existing tests (writes TEST.md noting absence, commits without test changes, does not crash)
 - Test: test deletion required (test agent classifies as `plan_invalid`, loops back correctly)
 - Test: CI fails on first PR attempt (summary loops back correctly; force-push used on second attempt, no new PR created)
-- Test: branch `agent/<hash>` already exists when setup runs (fails loudly with clear error)
+- Test: branch `agent/<hash>` already exists when setup runs (force-deleted and recreated with log message)
 - Test: `cost_budget_usd` exceeded mid-run (FAILURE.md written with `budget_exceeded`, non-zero exit)
 - Verification: each edge case exits cleanly with a populated FAILURE.md or loops correctly per spec
 
@@ -287,6 +287,40 @@ Run the full pipeline on real repos and fix what breaks.
 
 ---
 
+## Phase 6: Web Server
+
+Expose the pipeline via HTTP. The pipeline runs asynchronously in a background thread; callers poll for status.
+
+### Steps
+
+**6.1 — `pyproject.toml`**
+- Add `fastapi>=0.110.0` and `uvicorn[standard]>=0.29.0` to runtime dependencies
+
+**6.2 — `server.py`** (project root)
+- In-memory job registry `_jobs: dict[str, dict]` keyed by `issue_url`
+- `POST /issue`: validate → register job as `queued` → start daemon thread → return 202 with `{issue_url, status_url}`
+- `_run_pipeline_job`: set `running`, call `run_pipeline`, catch `SystemExit`/`Exception`, write `completed`/`failed` + `outcome` + `run_dir`
+- `GET /status?issue=<url>`: look up job; read STATE.json from `run_dir` when available; 404 if unknown
+- Guidelines inline string → tempfile, cleaned up in `finally`
+- Already queued/running → return 202 to same `status_url` without starting a new thread
+
+**6.3 — `main.py`** (restructured)
+- Argparse subcommands: `run` and `serve`
+- Verification: `python main.py --help` shows both subcommands
+
+### Phase 6 Tests
+- `tests/test_server.py` using `fastapi.testclient.TestClient` and a synchronous thread mock (`_SyncThread`):
+  - `GET /health` → 200, correct body
+  - Missing fields / budget ≤ 0 → 422
+  - `POST /issue` → 202, response has `issue_url` and `status_url`
+  - Already running/queued → 202, no new thread
+  - Pass/fail/exception outcomes stored correctly in job registry
+  - `GET /status` for unknown → 404; for queued/running/completed/failed → correct fields
+  - Completed job exposes STATE.json in `state` field
+  - Guidelines tempfile creation and cleanup
+
+---
+
 ## Milestones
 
 | Milestone | Done when |
@@ -296,3 +330,4 @@ Run the full pipeline on real repos and fix what breaks.
 | Phase 3 complete | All 5 agents produce correct outputs; Test agent commits on success; Summary squashes and creates/updates PR |
 | Phase 4 complete | TRACE.json with `cost_usd` per span generated on every run |
 | Phase 5 complete | ≥1 fixture issue produces a mergeable PR end-to-end; LLM-as-judge scores all 5 agents |
+| Phase 6 complete | HTTP server accepts jobs, returns 202, exposes STATE.json via polling endpoint |

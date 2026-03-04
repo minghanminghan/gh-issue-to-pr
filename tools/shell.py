@@ -5,18 +5,10 @@ from __future__ import annotations
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Optional, TypedDict
-
 from tools.fs import ToolResult, _err, _ok
 
 # Shell metacharacters that are rejected
 _SHELL_METACHARACTERS = [";", "|", "&", "$(", "`"]
-
-# Binaries that run inside the Docker sandbox when container_id is set
-SANDBOX_BINARIES: frozenset[str] = frozenset({"python", "node", "cargo", "npm", "pytest", "ruff", "mypy"})
-
-# Binaries that always run on the host regardless of container_id
-HOST_BINARIES: frozenset[str] = frozenset({"git", "gh"})
 
 # Full allowlist for all agents (binary, args_prefix)
 DEFAULT_ALLOWLIST: list[tuple[str, str]] = [
@@ -48,7 +40,6 @@ def execute_cli(
     cmd: str,
     allowlist: list[tuple[str, str]],
     cwd: Path,
-    container_id: Optional[str] = None,
 ) -> ToolResult:
     """
     Execute a CLI command subject to allowlist and safety checks.
@@ -85,10 +76,6 @@ def execute_cli(
             f"Rejected: '{binary}' with args '{args}' not in allowlist. "
             f"Allowed: {allowlist}"
         )
-
-    # Route sandbox binaries through docker exec when container is active
-    if container_id and binary in SANDBOX_BINARIES:
-        parts = ["docker", "exec", "--workdir", "/workspace", container_id] + parts
 
     try:
         result = subprocess.run(

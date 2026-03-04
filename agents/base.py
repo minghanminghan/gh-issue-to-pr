@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 
 import anthropic
 
+from schemas.state import FailureSource
 from tools.logger import log_tool_call
 from tools.state import read_state, write_state
 from tools.trace import Span, add_span
@@ -82,6 +83,40 @@ def run_agent(
 
             tokens_in_total += response.usage.input_tokens
             tokens_out_total += response.usage.output_tokens
+
+            # Mid-stream budget check
+            running_cost = _calc_cost(tokens_in_total, tokens_out_total)
+            budget_exceeded = False
+            budget_reason = ""
+            try:
+                _state = read_state(run_dir)
+                if _state.cost_spent_usd + running_cost >= _state.cost_budget_usd:
+                    budget_exceeded = True
+                    budget_reason = (
+                        f"Budget exceeded mid-agent: "
+                        f"${_state.cost_spent_usd + running_cost:.4f} >= ${_state.cost_budget_usd:.2f}"
+                    )
+                    _state.failure_source = FailureSource.budget_exceeded
+                    _state.last_failure_reason = budget_reason
+                    write_state(run_dir, _state)
+            except Exception:
+                pass
+            if budget_exceeded:
+                _record_span(
+                    run_dir, agent_name, start_time,
+                    tokens_in_total, tokens_out_total, running_cost,
+                    tools_called, files_read, files_written, "fail",
+                )
+                _update_cost(run_dir, running_cost)
+                return AgentResult(
+                    ok=False,
+                    output="",
+                    tokens_in=tokens_in_total,
+                    tokens_out=tokens_out_total,
+                    cost_usd=running_cost,
+                    failure_source="budget_exceeded",
+                    failure_reason=budget_reason,
+                )
 
             # Log to RUN.log
             log_tool_call(

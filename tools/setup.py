@@ -7,7 +7,6 @@ import subprocess
 from pathlib import Path
 
 from schemas.state import Step
-from tools.docker import install_project_deps, start_container
 from tools.state import init_run, read_state, write_state, _run_hash
 from tools.trace import open_trace
 
@@ -64,16 +63,6 @@ def run_setup(
     state.issue_body = issue_body
     state.current_step = Step.plan
     write_state(run_dir, state)
-
-    # ------------------------------------------------------------------ #
-    # 6. Start Docker sandbox (optional — no-op if docker not found)
-    # ------------------------------------------------------------------ #
-    container_id = start_container(repo_root)
-    if container_id:
-        install_project_deps(container_id, repo_root)
-        state = read_state(run_dir)
-        state.container_id = container_id
-        write_state(run_dir, state)
 
     return run_dir
 
@@ -168,7 +157,7 @@ def _fetch_issue(issue_url: str) -> tuple[str, str]:
 
 
 def _create_branch(repo_root: Path, branch_name: str) -> None:
-    # Check if branch already exists
+    # Check if branch already exists; force-reset it if so
     result = subprocess.run(
         ["git", "branch", "--list", branch_name],
         cwd=repo_root,
@@ -176,9 +165,14 @@ def _create_branch(repo_root: Path, branch_name: str) -> None:
         text=True,
     )
     if result.stdout.strip():
-        raise RuntimeError(
-            f"Branch '{branch_name}' already exists. "
-            "Delete it or use a different issue URL."
+        print(
+            f"Setup: branch '{branch_name}' already exists — deleting and recreating.",
+            file=__import__("sys").stderr,
+        )
+        subprocess.run(
+            ["git", "branch", "-D", branch_name],
+            cwd=repo_root,
+            capture_output=True,
         )
 
     result = subprocess.run(

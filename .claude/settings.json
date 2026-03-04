@@ -3,6 +3,9 @@
     "allow": [
       "Bash(uv sync)",
       "Bash(python -c \":*)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\andre\\Desktop\\projects\\gh-issue-to-pr\\tools"
     ]
   }
 }

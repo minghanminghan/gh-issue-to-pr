@@ -40,7 +40,7 @@ I want to build a series of agents that read through github issues for a repo an
 ## 5. Summary
 - Only runs when steps 1–4 have completed successfully
 - Collect context from previous agents and format changes into PR
-- Squash all commits on `agent/<hash>` into a single commit via `git rebase -i origin/main`
+- Squash all commits on `agent/<hash>` into a single commit via `git rebase --autosquash origin/main` (or `git reset --soft $(git merge-base HEAD origin/main)` + commit)
 - If STATE.json contains no `pr_url`: create PR via `gh pr create`; write URL to STATE.json
 - If STATE.json contains a `pr_url` (loop-back): force-push the squashed commit to the same branch — do not create a new PR
 - Poll CI status after push; if CI fails, write failure report to SUMMARY.md and return result to orchestrator (global loop back to 1.)
@@ -98,8 +98,8 @@ I want to build a series of agents that read through github issues for a repo an
 
 ### Loop caps
 - Global loop (back to Plan): hard cap of 3
-- Local exec↔validate cycle: cap of 2 per global iteration; resets to 0 on each global loop-back
-- If `cost_spent_usd >= cost_budget_usd` before any agent call, set `failure_source = budget_exceeded` and route to Step 6
+- Local exec↔validate cycle: cap of 2 retries (3 total attempts) per global iteration; resets to 0 on each global loop-back
+- If `cost_spent_usd >= cost_budget_usd` before any agent call, or mid-agent-stream, set `failure_source = budget_exceeded` and route to Step 6
 - Failure classification is the responsibility of the Validate and Test agents; they set `failure_source` in STATE.json
 
 ## Context Injection on Loop-back
@@ -198,95 +198,75 @@ I want to build a series of agents that read through github issues for a repo an
 - **Execution safety**: Execute agent can write arbitrary files. Mitigated by scoping writes to FILES.md entries and the read_only list, but not fully sandboxed.
 - **Cost runaway**: Multi-loop runs on large repos can be expensive. Mitigated by `cost_budget_usd` cap, but the cap is a soft guardrail.
 - **GitHub rate limits**: Issue fetch and CI polling hit the API. Use `gh` CLI (which handles auth and retry) rather than raw HTTP.
-- **Branch conflicts**: If `agent/<hash>` already exists from a prior failed run, Setup must decide whether to reset it or fail loudly.
+- **Branch conflicts**: If `agent/<hash>` already exists from a prior failed run, Setup force-deletes it and logs to stderr before recreating.
 - **Secrets exposure**: `.env*` and credential files must be in `read_only` by default. The allowlist on execute_cli reduces but doesn't eliminate risk.
 - **Test suite absence**: Some repos have no tests. Test agent must handle this gracefully (write TEST.md noting absence, don't fail).
 - **Large repos**: Plan agent may hit context limits scanning a large repo. FILES.md scoping is the primary mitigation; may need chunked grep strategies.
 
 
-# Phase 6: Code Sandboxing (Docker)
+# Phase 6: Web Server
 
-In Step 0 (Setup), start a Docker container with the repo mounted at `/workspace`. Code execution commands (python, pytest, ruff, mypy, node, cargo, npm) route through `docker exec` inside the container. git and gh commands always run on the host. The container is torn down in Step 6 (Report).
-
-## 0. Setup (updated)
-- After branch creation and STATE.json initialisation, call `start_container(repo_root)` and `install_project_deps()`
-- If Docker is not installed: print warning to stderr, continue without sandbox (soft-fail)
-- Write `container_id` to STATE.json when a container is started
-
-## Steps
-
-**6.1 — `tools/docker.py`** (new file)
-- `start_container(repo_root, image="python:3.11-slim") -> str | None`
-- `stop_container(container_id: str) -> None`
-- `install_project_deps(container_id, repo_root) -> None`
-- Verification: `python -c "from tools.docker import start_container, stop_container; print('ok')"`
-
-**6.2 — `schemas/state.py`**
-- Add `container_id: Optional[str] = None` to `PipelineState`
-- Verification: `python -c "from schemas.state import PipelineState; assert PipelineState(repo_url='r', local_dir='/t', issue_url='i').container_id is None"`
-
-**6.3 — `tools/setup.py`**
-- After step 5, start container and save `container_id` to STATE.json
-
-**6.4 — `tools/shell.py`**
-- Add `SANDBOX_BINARIES` frozenset: `{python, node, cargo, npm, pytest, ruff, mypy}`
-- Add `HOST_BINARIES` frozenset: `{git, gh}`
-- Add `container_id: Optional[str] = None` param to `execute_cli()`
-- When `container_id` set and binary in `SANDBOX_BINARIES`: prepend `docker exec --workdir /workspace <container_id>`
-- Verification: `pytest tests/test_tools.py -v` — passes with default `container_id=None`
-
-**6.5 — `agents/execute.py`, `agents/validate.py`, `agents/test_agent.py`**
-- Read `state.container_id` and pass to `execute_cli` closure in each agent
-
-**6.6 — `tools/report.py`**
-- Call `stop_container(state.container_id)` before `close_trace()` on both pass and fail
-
-### Phase 6 Tests
-- `tests/test_docker.py`: docker availability detection; container start/stop/soft-fail; dep install skip/run/warn; `SANDBOX_BINARIES`/`HOST_BINARIES` membership; `execute_cli` sandbox routing; `container_id` round-trips through STATE.json; report calls `stop_container`
-
-
-# Phase 7: Web Server
-
-Expose the pipeline via HTTP. No changes to existing pipeline logic.
+Expose the pipeline via HTTP. The pipeline runs asynchronously in a background thread; callers poll for status.
 
 ## Endpoints
 
 - `GET /health` → `{"status": "ok", "version": "0.1.0"}`
-- `POST /issue` → run pipeline, return result
+- `POST /issue` → accept job, return 202 immediately
+- `GET /status?issue=<url>` → return STATE.json for the issue
 
-### Request schema
+### POST /issue request schema
 ```json
 { "issue_url": str, "repo_url": str, "local_path": str|null, "guidelines": str|null, "budget": float }
 ```
 
-### Response schema
+### POST /issue response schema (202 Accepted)
 ```json
-{ "run_dir": str, "outcome": "pass"|"fail", "pr_url": str|null, "cost_spent_usd": float, "loop_count": int }
+{ "issue_url": str, "status_url": "/status?issue=<url>" }
 ```
+
+### GET /status response schema
+```json
+{
+  "status": "queued"|"running"|"completed"|"failed",
+  "issue_url": str,
+  "run_dir": str|null,
+  "outcome": "pass"|"fail"|null,
+  "error": str|null,
+  "state": { ...STATE.json fields... }|null
+}
+```
+
+If an issue is already queued or running when POST /issue is called, the server returns 202 pointing to the existing status URL without starting a new thread.
 
 ## Steps
 
-**7.1 — `pyproject.toml`**
+**6.1 — `pyproject.toml`**
 - Add `fastapi>=0.110.0` and `uvicorn[standard]>=0.29.0` to runtime dependencies
 
-**7.2 — `server.py`** (new file, project root)
-- FastAPI app with `GET /health` and `POST /issue`
-- Inline `guidelines` string written to tempfile; cleaned up in `finally`
-- `except SystemExit` converts `run_report`'s `sys.exit(1)` → `outcome="fail"`, HTTP 200
-- Unhandled exceptions → HTTP 500
+**6.2 — `server.py`** (project root)
+- In-memory job registry: `_jobs: dict[str, dict]` keyed by `issue_url`
+- `POST /issue`: validate request, register job as `queued`, start `threading.Thread(target=_run_pipeline_job, daemon=True)`, return 202
+- `_run_pipeline_job`: set status `running`, call `run_pipeline`, handle `SystemExit`/`Exception`, set status `completed`/`failed`, store `run_dir` and `outcome`
+- `GET /status`: look up job by `issue` query param; read STATE.json from `run_dir` if available; return 404 if unknown
+- Inline `guidelines` string written to tempfile; cleaned up in job `finally` block
 
-**7.3 — `main.py`** (restructured)
+**6.3 — `main.py`** (restructured)
 - Add argparse subparsers:
   - `run <issue_url> <repo_url> [--local-path] [--guidelines] [--budget]`
   - `serve [--host 127.0.0.1] [--port 8080]`
 - Verification: `python main.py --help` shows both subcommands
 
-### Phase 7 Tests
+### Phase 6 Tests
 - `tests/test_server.py` using `fastapi.testclient.TestClient`:
   - `GET /health` → 200, correct body
   - Missing fields / budget ≤ 0 → 422
-  - Mocked pipeline returning run_dir → 200, correct outcome and fields
-  - `SystemExit(1)` → 200, `outcome="fail"`
-  - `RuntimeError` → 500
+  - `POST /issue` → 202, response has `issue_url` and `status_url`
+  - Already running/queued → 202, no new thread started
+  - Job completes (via synchronous thread mock) → job registry updated with outcome
+  - `SystemExit(1)` → job stored as `failed`
+  - `RuntimeError` → job stored as `failed` with error message
+  - `GET /status` for unknown issue → 404
+  - `GET /status` for queued/running/completed/failed → correct `status` field
+  - Completed job with run_dir → `state` field populated from STATE.json
   - Guidelines tempfile creation and cleanup
   - `_serve_subcommand` calls `uvicorn.run`
