@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import TypedDict
 
-import anthropic
+import litellm
 
-MODEL = "claude-opus-4-6"
+MODEL = os.environ.get("LLM_MODEL", "anthropic/claude-opus-4-6")
+_, _PROVIDER, _, _ = litellm.get_llm_provider(MODEL)
 
 _RUBRICS: dict[str, list[str]] = {
     "plan": [
@@ -61,15 +63,16 @@ def evaluate_agent(agent_name: str, run_dir: Path) -> EvalResult:
     artifacts = _load_artifacts(agent_name, run_dir)
     prompt = _build_eval_prompt(agent_name, rubric, artifacts)
 
-    client = anthropic.Anthropic()
-    response = client.messages.create(
+    kwargs = dict(
         model=MODEL,
-        max_tokens=2048,
-        thinking={"type": "adaptive"},
+        max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
+    if _PROVIDER == "anthropic":
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": 2048}
 
-    text = next((b.text for b in response.content if b.type == "text"), "")
+    response = litellm.completion(**kwargs)
+    text = response.choices[0].message.content or ""
     return _parse_eval_response(agent_name, rubric, text)
 
 

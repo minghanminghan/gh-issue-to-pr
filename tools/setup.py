@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -10,6 +11,9 @@ from schemas.state import Step
 from tools.state import init_run, read_state, write_state, _run_hash
 from tools.trace import open_trace
 
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")  # must have repo access; used by gh CLI
+if not GITHUB_TOKEN:
+    raise ValueError("Error: GITHUB_TOKEN environment variable not set. Please set it to a GitHub Personal Access Token with repo access.", file=__import__("sys").stderr)
 
 def run_setup(
     repo_url: str,

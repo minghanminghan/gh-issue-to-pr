@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "AI agent pipeline that turns GitHub issues into pull requests"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.50.0",
+    "litellm>=1.60.0",
     "pydantic>=2.0.0",
     "arize-phoenix-otel>=0.1.0",
     "opentelemetry-sdk>=1.0.0",

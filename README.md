@@ -1,6 +1,6 @@
 # gh-issue-to-pr
 
-An AI agent pipeline that turns GitHub issues into pull requests. Given an issue URL, it autonomously reads the codebase, plans changes, writes code, validates it, runs tests, and opens a PR — all using Claude as the reasoning engine.
+An AI agent pipeline that turns GitHub issues into pull requests. Given an issue URL, it autonomously reads the codebase, plans changes, writes code, validates it, runs tests, and opens a PR -- all using an LLM via LiteLLM.
 
 ## How it works
 
@@ -25,10 +25,10 @@ Setup → Plan → Execute ↔ Validate → Test → Summary → Report
 
 When validation or tests fail, the pipeline loops back rather than aborting:
 
-- **`minor` / `spec_deviation`** — retry in the local Execute ↔ Validate cycle (cap: 2 retries, 3 total attempts)
-- **`plan_invalid`** — loop back to Plan with failure context injected (global loop cap: 3)
-- **`unrecoverable`** — route straight to Report
-- **Budget exceeded** — route straight to Report
+- **`minor` / `spec_deviation`** -- retry in the local Execute ↔ Validate cycle (cap: 2 retries, 3 total attempts)
+- **`plan_invalid`** -- loop back to Plan with failure context injected (global loop cap: 3)
+- **`unrecoverable`** -- route straight to Report
+- **Budget exceeded** -- route straight to Report
 
 On any loop-back, the agent that failed writes a report to its artifact file, and the orchestrator prepends a *Previous Attempt* block to the next agent's prompt so it can learn from the failure.
 
@@ -37,10 +37,10 @@ On any loop-back, the agent that failed writes a report to its artifact file, an
 ## Prerequisites
 
 - **Python 3.11+**
-- **[uv](https://docs.astral.sh/uv/)** — package manager
-- **[gh CLI](https://cli.github.com/)** — authenticated (`gh auth login`)
-- **`ANTHROPIC_API_KEY`** environment variable set
-- Git installed and the target repo must be either cloned locally (clean working tree) or accessible for cloning
+- **[uv](https://docs.astral.sh/uv/)** -- package manager
+- **[gh CLI](https://cli.github.com/)** -- authenticated (`gh auth login`)
+- **Environment variables set** -- see .env.example
+- The target repo must be either accessible for cloning or cloned locally
 
 ---
 
@@ -56,7 +56,7 @@ uv sync
 
 ## Usage
 
-### CLI — run the pipeline
+### CLI -- run the pipeline
 
 ```
 python main.py run <issue_url> <repo_url> [options]
@@ -64,8 +64,8 @@ python main.py run <issue_url> <repo_url> [options]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `issue_url` | Yes | Full GitHub issue URL — `https://github.com/owner/repo/issues/42` |
-| `repo_url` | Yes | GitHub repo URL — `https://github.com/owner/repo` |
+| `issue_url` | Yes | Full GitHub issue URL -- `https://github.com/owner/repo/issues/42` |
+| `repo_url` | Yes | GitHub repo URL -- `https://github.com/owner/repo` |
 | `--local-path PATH` | No | Use an existing local checkout instead of cloning |
 | `--guidelines FILE` | No | Path to contribution guidelines (e.g. `CONTRIBUTING.md`) |
 | `--budget USD` | No | Cost cap in USD (default: `2.00`) |
@@ -90,7 +90,7 @@ The pipeline prints the run artifact directory on completion:
 Pipeline completed. Run artifacts: /path/to/repo/.agent/a3f9c1b2/
 ```
 
-### CLI — start the web server
+### CLI -- start the web server
 
 ```
 python main.py serve [--host HOST] [--port PORT]
@@ -181,7 +181,7 @@ Every run creates a directory at `<repo_root>/.agent/<hash>/` (`.agent/` is giti
 
 | File | Written by | Contents |
 |------|-----------|----------|
-| `STATE.json` | All steps | Shared pipeline state — branch name, loop counts, cost, PR URL, container ID, etc. |
+| `STATE.json` | All steps | Shared pipeline state -- branch name, loop counts, cost, PR URL, container ID, etc. |
 | `ISSUE.md` | Setup | Issue title, body, and comments fetched from GitHub |
 | `PLAN.md` | Plan agent | Ordered list of changes with per-step verification commands |
 | `FILES.md` | Plan agent | Repo-relative paths of files to be modified |
@@ -203,7 +203,7 @@ Key fields you can inspect or override:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `cost_budget_usd` | `2.00` | Hard cap — pipeline halts if `cost_spent_usd` reaches this before any agent call |
+| `cost_budget_usd` | `2.00` | Hard cap -- pipeline halts if `cost_spent_usd` reaches this before any agent call |
 | `read_only` | See below | Glob patterns of files agents may never write |
 | `loop_count` | `0` | Global plan→execute→validate→test loop count |
 | `local_loop_count` | `0` | Execute↔Validate retry count within a single global iteration (cap: 2 retries, 3 total) |
@@ -222,13 +222,6 @@ LICENSE
 ```
 
 The Plan agent can extend this list by adding entries to `STATE.json` if it identifies files that must not change for the given issue.
-
-### Environment variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Anthropic API key |
-| `PHOENIX_COLLECTOR_ENDPOINT` | No | OTLP endpoint for Arize Phoenix trace export (e.g. `http://localhost:6006`) |
 
 ---
 
@@ -281,7 +274,7 @@ Setup creates `agent/<hash>` and fails loudly if the branch already exists. It w
 
 ## Testing
 
-The test suite uses `pytest` and requires no running services — all external calls (Claude API, `gh` CLI, git) are mocked.
+The test suite uses `pytest` and requires no running services -- all external calls (LLM API, `gh` CLI, git) are mocked.
 
 ### Run all tests
 
@@ -308,7 +301,7 @@ uv run pytest tests/test_server.py -v
 
 ### Per-agent (LLM-as-judge)
 
-`tools/eval.py` implements rubric-based scoring for each agent using `claude-opus-4-6`:
+`tools/eval.py` implements rubric-based scoring for each agent using the model configured via `LLM_MODEL`:
 
 | Agent | Rubric criteria |
 |-------|----------------|
@@ -330,8 +323,8 @@ uv run pytest tests/test_server.py -v
 
 See [docs/concerns.md](docs/concerns.md) for full details. In brief:
 
-- **Soft cost cap** — mid-agent cost spikes can still exceed the budget between API responses; the check fires after each streamed response, not token-by-token
-- **Branch conflicts** — if `agent/<hash>` already exists, Setup force-deletes and recreates it; any uncommitted work on that branch will be lost
-- **In-memory job state** — the server stores job status in memory; restarting the server loses all pending/running job records
-- **Large repos** — the Plan agent may approach context limits on repos with >10K files; chunked grep strategies are not yet implemented
-- **`package-lock.json`** — the default `*.lock` pattern matches `yarn.lock`, `Pipfile.lock`, etc., but not `package-lock.json` (which ends in `.json`). Add `package-lock.json` to `read_only` manually if needed.
+- **Soft cost cap** -- mid-agent cost spikes can still exceed the budget between API responses; the check fires after each streamed response, not token-by-token
+- **Branch conflicts** -- if `agent/<hash>` already exists, Setup force-deletes and recreates it; any uncommitted work on that branch will be lost
+- **In-memory job state** -- the server stores job status in memory; restarting the server loses all pending/running job records
+- **Large repos** -- the Plan agent may approach context limits on repos with >10K files; chunked grep strategies are not yet implemented
+- **`package-lock.json`** -- the default `*.lock` pattern matches `yarn.lock`, `Pipfile.lock`, etc., but not `package-lock.json` (which ends in `.json`). Add `package-lock.json` to `read_only` manually if needed.

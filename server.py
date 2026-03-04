@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from pipeline import run_pipeline
@@ -55,6 +56,40 @@ class StatusResponse(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+# class IssueRequest(BaseModel):
+#     issue_url: str
+#     repo_url: str
+#     local_path: Optional[str] = None
+#     guidelines: Optional[str] = None  # inline string; written to tempfile internally
+#     budget: float = Field(default=2.0, gt=0)
+
+@app.get("/", response_class=HTMLResponse)
+def root() -> str:
+    return """
+    <html>
+        <form id="issue-form">
+            <input type="url" name="issue_url" placeholder="Issue URL" required>
+            <input type="url" name="repo_url" placeholder="Repo URL" required>
+            <button type="submit">Submit</button>
+        </form>
+    </html>
+    <script>
+    const form = document.getElementById('issue-form');
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(form);
+        const data = {
+            issue_url: formData.get('issue_url'),
+            repo_url: formData.get('repo_url'),
+        };
+        await fetch('/issue', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data),
+        });
+    </script>
+    """
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "version": "0.1.0"}
@@ -94,7 +129,7 @@ def submit_issue(req: IssueRequest) -> AcceptedResponse:
 
 
 @app.get("/status", response_model=StatusResponse)
-def get_status(issue: str) -> StatusResponse:
+def get_status(issue_url: str) -> StatusResponse:
     """
     Return the current status of a pipeline job.
 
@@ -102,7 +137,7 @@ def get_status(issue: str) -> StatusResponse:
     Returns the full STATE.json when a run directory is available.
     """
     with _jobs_lock:
-        job = _jobs.get(issue)
+        job = _jobs.get(issue_url)
 
     if job is None:
         raise HTTPException(status_code=404, detail="No job found for this issue URL")
@@ -118,7 +153,7 @@ def get_status(issue: str) -> StatusResponse:
 
     return StatusResponse(
         status=job["status"],
-        issue_url=issue,
+        issue_url=issue_url,
         run_dir=run_dir,
         outcome=job.get("outcome"),
         error=job.get("error"),

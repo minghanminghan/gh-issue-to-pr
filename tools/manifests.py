@@ -1,4 +1,4 @@
-"""Per-agent tool manifests and Claude SDK tool-schema builder."""
+"""Per-agent tool manifests and LiteLLM/OpenAI tool-schema builder."""
 
 from __future__ import annotations
 
@@ -154,10 +154,18 @@ _SCHEMAS: dict[str, dict] = {
 
 
 def build_tools(manifest: ToolManifest) -> list[dict]:
-    """Convert a ToolManifest into a list of Claude SDK tool-use schemas."""
+    """Convert a ToolManifest into LiteLLM/OpenAI function-calling schemas."""
     result = []
     for name in manifest.tool_names:
         if name not in _SCHEMAS:
             raise ValueError(f"Unknown tool '{name}' in manifest for agent '{manifest.agent_name}'")
-        result.append(_SCHEMAS[name])
+        s = _SCHEMAS[name]
+        result.append({
+            "type": "function",
+            "function": {
+                "name": s["name"],
+                "description": s["description"],
+                "parameters": s["input_schema"],
+            },
+        })
     return result

@@ -88,6 +88,6 @@ This document tracks the operational concerns for the gh-issue-to-pr pipeline an
 **Mitigation:**
 - Plan agent uses FILES.md scoping to focus exploration
 - `grep` and `list_dir` tools allow targeted exploration without reading entire files
-- Adaptive thinking (`thinking: {type: "adaptive"}`) allows the model to use context efficiently
+- Thinking/reasoning mode (enabled for Anthropic models via LiteLLM's `thinking` parameter) allows the model to use context efficiently
 
 **Current status:** Mitigated for typical repos. Very large repos (>10K files) may still cause issues; chunked grep strategies have not been implemented.
