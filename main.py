@@ -6,7 +6,11 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
+
 from pipeline import run_pipeline
+
 
 
 def _run_subcommand(args: argparse.Namespace) -> None:
@@ -28,7 +32,7 @@ def _run_subcommand(args: argparse.Namespace) -> None:
             issue_url=args.issue_url,
             guidelines_path=args.guidelines,
             local_path=args.local_path,
-            config_path=args.config,
+            model_name=args.model_name,
             max_steps=args.max_steps,
         )
         print(f"\nPipeline completed. Run artifacts: {run_dir}")
@@ -77,9 +81,9 @@ Examples:
         help="Path to contribution guidelines file (e.g. CONTRIBUTING.md)",
     )
     run_parser.add_argument(
-        "--config",
-        metavar="FILE",
-        help="Path to a custom agent configuration YAML file",
+        "--model-name",
+        metavar="MODEL",
+        help="LiteLLM model name to use (e.g. anthropic/claude-sonnet-4-5-20250929)",
     )
     run_parser.add_argument(
         "--max-steps",

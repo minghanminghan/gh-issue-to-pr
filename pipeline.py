@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
+import json
+import logging
 from pathlib import Path
 
 from minisweagent.agents.default import DefaultAgent
@@ -11,11 +13,10 @@ from minisweagent.environments.local import LocalEnvironment
 from minisweagent.models.litellm_model import LitellmModel
 from minisweagent.config import get_config_from_spec
 
-# from schema.state import Step
+from schema.config import AgentConfig
 from tools.logger import log_event, log_tool_call
 from tools.setup import run_setup
 from tools.trace import close_trace, add_span, Span
-import logging
 
 
 MODEL_NAME = os.getenv("MODEL_NAME")
@@ -23,44 +24,8 @@ if not MODEL_NAME:
     raise ValueError("MODEL_NAME environment variable not set")
 
 
-def run_pipeline(
-    issue_url: str,
-    guidelines_path: str | None = None,
-    local_path: str | None = None,
-    config_path: str | None = None,
-    max_steps: int | None = None,
-) -> Path:
-    """
-    Main pipeline entry point.
-
-    Steps:
-      0 (setup) -> 1 (mini-swe-agent) -> 2 (report)
-
-    Returns run_dir.
-    """
-    guidelines = ""
-    if guidelines_path:
-        try:
-            guidelines = Path(guidelines_path).read_text(encoding="utf-8")
-        except Exception as e:
-            print(f"Warning: could not read guidelines file: {e}", file=sys.stderr)
-
-    # ------------------------------------------------------------------ #
-    # Step 0: Setup (deterministic, not an agent)
-    # ------------------------------------------------------------------ #
-    run_dir = run_setup(issue_url, local_path=local_path, config_path=config_path, max_steps=max_steps)
-    log_event(run_dir, "pipeline_start", {"issue_url": issue_url})
-
-    outcome = "fail"
-    try:
-        outcome = _run_pipeline_steps(run_dir, guidelines, config_path)
-    except Exception as e:
-        log_event(run_dir, "pipeline_exception", {"error": str(e)})
-    finally:
-        # Step 2: Report - always runs
-        _run_report(run_dir, outcome)
-
-    return run_dir
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
 
 
 class AgentTrackingHandler(logging.Handler):
@@ -73,6 +38,8 @@ class AgentTrackingHandler(logging.Handler):
         self.run_dir = run_dir
 
     def emit(self, record):
+        log.debug(record)
+
         # mini-swe-agent emits lists of message dicts to agent.logger.debug
         if not isinstance(record.msg, (list, tuple)):
             return
@@ -118,31 +85,67 @@ class AgentTrackingHandler(logging.Handler):
                 )
 
 
-def _run_pipeline_steps(run_dir: Path, guidelines: str, config_path: str | None = None) -> str:
+def run_pipeline(
+    issue_url: str,
+    guidelines_path: str | None,
+    local_path: str | None,
+    model_name: str | None,
+    max_steps: int | None,
+) -> Path:
+    """
+    Main pipeline entry point.
+
+    Steps:
+      0 (setup) -> 1 (mini-swe-agent) -> 2 (report)
+
+    Returns run_dir.
+    """
+    guidelines = ""
+    if guidelines_path:
+        try:
+            guidelines = Path(guidelines_path).read_text(encoding="utf-8")
+        except Exception as e:
+            print(f"Warning: could not read guidelines file: {e}", file=sys.stderr)
+
+    # Step 0: Setup (deterministic, not an agent)
+    run_dir = run_setup(issue_url, local_path=local_path)
+    log_event(run_dir, "pipeline_start", {"issue_url": issue_url})
+
+    agent_config = AgentConfig(model_name=model_name, max_steps=max_steps)
+    outcome = "fail"
+    try:
+        outcome = _run_pipeline_steps(run_dir, guidelines, agent_config)
+    except Exception as e:
+        log_event(run_dir, "pipeline_exception", {"error": str(e)})
+    finally:
+        # Step 2: Report - always runs
+        _run_report(run_dir, outcome, issue_url, agent_config)
+
+    return run_dir
+
+
+def _run_pipeline_steps(run_dir: Path, guidelines: str, agent_config: AgentConfig | None) -> str:
     """Inner pipeline loop using mini-swe-agent. Returns 'pass' or 'fail'."""
     repo_root = run_dir.parent.parent
 
-    # ---------------------------------------------------------------- #
     # Step 1: Execute agent
-    # ---------------------------------------------------------------- #
     log_event(run_dir, "step_start", {"step": "agent"})
 
     try:
         # 1. Initialize the environment pointing to the cloned repository
         env = LocalEnvironment(repo_path=str(repo_root))
 
-        # 2. Initialize the model (using config or default)
-        model = LitellmModel(model_name=MODEL_NAME)
+        # 2. Load config and apply overrides
+        config = get_config_from_spec(Path("mswea_config.yaml"))
+        if agent_config.model_name is not None:
+            config.setdefault("model", {})["model_name"] = agent_config.model_name
+        if agent_config.max_steps is not None:
+            config.setdefault("agent", {})["step_limit"] = agent_config.max_steps
 
-        # 3. Instantiate the agent using config
-        config_file = run_dir / "config.yaml"
-        if config_file.exists():
-            config = get_config_from_spec(str(config_file))
-        elif config_path:
-            config = get_config_from_spec(config_path)
-        else:
-            config = get_config_from_spec("default")
-            
+        # 3. Initialize the model (prefer config model_name over env var)
+        effective_model = config.get("model", {}).get("model_name", MODEL_NAME)
+        model = LitellmModel(model_name=effective_model)
+
         agent_kwargs = config.get("agent", {})
         agent = DefaultAgent(model=model, env=env, **agent_kwargs)
 
@@ -176,11 +179,12 @@ def _run_pipeline_steps(run_dir: Path, guidelines: str, config_path: str | None 
         return "pass"
 
     except Exception as e:
+        log.error(f"Agent execution failed: {e}", exc_info=True)
         log_event(run_dir, "agent_failure", {"error": str(e)})
         return "fail"
 
 
-def _run_report(run_dir: Path, outcome: str) -> None:
+def _run_report(run_dir: Path, outcome: str, issue_url: str, agent_config: AgentConfig) -> None:
     """
     Post-flight
 
@@ -192,7 +196,7 @@ def _run_report(run_dir: Path, outcome: str) -> None:
     run_dir = Path(run_dir)
 
     # Close trace (writes TRACE.json)
-    close_trace(run_dir, outcome)
+    close_trace(run_dir, outcome, issue_url, agent_config)
 
     if outcome == "failure":
         sys.exit(1)

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import tempfile
 import threading
 import traceback
@@ -34,8 +37,8 @@ class IssueRequest(BaseModel):
     repo_url: str
     local_path: str | None = None
     guidelines: str | None = None  # inline string; written to tempfile internally
-    config_path: str | None = None # Path to a custom agent configuration YAML file
-    budget: float = Field(default=2.0, gt=0)
+    budget: float = Field(default=2.0, gt=0) # TODO: propagate to AgentConfig
+    model_name: str | None = Field(default=None)
     max_steps: int | None = Field(default=None, gt=0)
 
 
@@ -50,7 +53,6 @@ class StatusResponse(BaseModel):
     run_dir: str | None = None
     outcome: str | None = None
     error: str | None = None
-    state: dict[str, Any] | None = None  # full STATE.json content when available
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +138,6 @@ def get_status(issue_url: str) -> StatusResponse:
     Return the current status of a pipeline job.
 
     Poll this endpoint after POST /issue returns 202.
-    Returns the full STATE.json when a run directory is available.
     """
     with _jobs_lock:
         job = _jobs.get(issue_url)
@@ -182,7 +183,7 @@ def _run_pipeline_job(req: IssueRequest) -> None:
             issue_url=req.issue_url,
             guidelines_path=guidelines_path,
             local_path=req.local_path,
-            config_path=req.config_path,
+            model_name=req.model_name,
             max_steps=req.max_steps,
         )
         outcome = "pass"

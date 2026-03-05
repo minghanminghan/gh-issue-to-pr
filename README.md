@@ -157,7 +157,6 @@ curl "http://127.0.0.1:8080/status?issue=https://github.com/owner/repo/issues/42
 | `run_dir` | string \| null | Path to the `.agent/<hash>/` run directory once known |
 | `outcome` | string \| null | `"pass"` or `"fail"` once complete |
 | `error` | string \| null | Error message if an unexpected exception occurred |
-| `state` | object \| null | Full `STATE.json` contents once a run directory is available |
 
 ---
 

@@ -1,6 +1,7 @@
 """Structured JSON-line logger that writes to RUN.log in the run directory."""
 
 from __future__ import annotations
+from typing_extensions import Any
 
 import json
 from datetime import datetime, timezone
@@ -35,7 +36,7 @@ def log_tool_call(
 def log_event(
     run_dir: Path,
     event: str,
-    data: dict[str, str] | None = None,
+    data: dict[str, Any] | None = None,
 ) -> None:
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),

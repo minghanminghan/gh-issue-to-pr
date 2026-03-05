@@ -47,9 +47,6 @@ def test_close_trace(mock_export, tmp_path):
     run_dir = tmp_path / "run3"
     run_dir.mkdir()
     
-    state_file = run_dir / "STATE.json"
-    state_file.write_text(json.dumps({"issue_url": "test-url", "loop_count": 2}))
-    
     span = Span(
         agent="test-agent",
         start_time="2026-03-05T00:00:00Z",
@@ -71,12 +68,10 @@ def test_close_trace(mock_export, tmp_path):
     assert trace_file.exists()
     
     trace_data = json.loads(trace_file.read_text())
-    assert trace_data["issue_url"] == "test-url"
     assert trace_data["outcome"] == "pass"
     assert trace_data["total_tokens_in"] == 100
     assert trace_data["total_tokens_out"] == 200
     assert trace_data["total_cost_usd"] == 1.5
-    assert trace_data["loop_count"] == 2
     
     mock_export.assert_called_once()
     assert mock_export.call_args[0][1] == "http://localhost:4318"

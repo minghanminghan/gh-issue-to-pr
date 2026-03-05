@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +14,13 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import SpanKind
+
+from schema.config import AgentConfig
+
+import logging
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG) # TODO: change for prod
+
 
 # In-memory registry of open traces (keyed by run_dir string)
 _open_traces: dict[str, dict] = {}
@@ -39,6 +45,8 @@ def open_trace(run_dir: Path) -> None:
         "start_time": datetime.now(timezone.utc).isoformat(),
         "spans": [],
     }
+    # log_event(run_dir, "trace_opened", {"run_id": Path(run_dir).name, "start_time": datetime.now(timezone.utc).isoformat(), "spans": []})
+    log.debug(f"Trace opened for run_dir={run_dir}")
 
 
 def add_span(run_dir: Path, span: Span) -> None:
@@ -46,11 +54,13 @@ def add_span(run_dir: Path, span: Span) -> None:
     key = str(run_dir)
     if key not in _open_traces:
         # Silently create trace if not opened (e.g. resumed run)
+        log.debug(f"No open trace for run_dir={run_dir}. Creating new trace.")
         open_trace(run_dir)
     _open_traces[key]["spans"].append(asdict(span))
+    log.debug(f"Added span for run_dir={run_dir}: {span}")
 
 
-def close_trace(run_dir: Path, outcome: str) -> None:
+def close_trace(run_dir: Path, outcome: str, issue_url: str, agent_config: AgentConfig) -> None:
     """
     Called by the Report step. Writes TRACE.json and optionally exports to
     Arize Phoenix via OTLP if PHOENIX_COLLECTOR_ENDPOINT is set.
@@ -60,18 +70,12 @@ def close_trace(run_dir: Path, outcome: str) -> None:
     trace = _open_traces.pop(key, {})
 
     if not trace:
+        log.debug(f"No open trace found for run_dir={run_dir}. Creating empty trace.")
         trace = {
             "run_id": run_dir.name,
             "start_time": datetime.now(timezone.utc).isoformat(),
             "spans": [],
         }
-
-    # Load STATE.json for additional metadata
-    state_data: dict = {}
-    state_path = run_dir / "STATE.json"
-    if state_path.exists():
-        with open(state_path) as f:
-            state_data = json.load(f)
 
     spans = trace.get("spans", [])
     total_cost = sum(s.get("cost_usd", 0.0) for s in spans)
@@ -80,13 +84,14 @@ def close_trace(run_dir: Path, outcome: str) -> None:
 
     trace_json = {
         "run_id": trace["run_id"],
-        "issue_url": state_data.get("issue_url", ""),
+        "issue_url": issue_url,
         "start_time": trace["start_time"],
         "end_time": datetime.now(timezone.utc).isoformat(),
+        "steps": len(spans), # might be flaky
+        "max_steps": agent_config.max_steps, # might be None, should change upstream logic
         "total_tokens_in": total_tokens_in,
         "total_tokens_out": total_tokens_out,
         "total_cost_usd": total_cost,
-        "loop_count": state_data.get("loop_count", 0),
         "outcome": outcome,
         "human_feedback": None,
         "spans": spans,
@@ -119,7 +124,6 @@ def _export_to_phoenix(trace_json: dict, endpoint: str) -> None:
             root_span.set_attribute("issue_url", trace_json["issue_url"])
             root_span.set_attribute("outcome", trace_json["outcome"])
             root_span.set_attribute("total_cost_usd", trace_json["total_cost_usd"])
-            root_span.set_attribute("loop_count", trace_json["loop_count"])
 
             for span_data in trace_json["spans"]:
                 with tracer.start_as_current_span(
@@ -134,4 +138,4 @@ def _export_to_phoenix(trace_json: dict, endpoint: str) -> None:
         provider.force_flush()
 
     except Exception as e:
-        print(f"Warning: OTLP export to Phoenix failed: {e}", file=sys.stderr)
+        log.warning(f"Warning: OTLP export to Phoenix failed: {e}")

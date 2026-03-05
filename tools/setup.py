@@ -1,11 +1,11 @@
-"""Setup step: fetch issue, clone/verify repo, create branch, init STATE.json."""
+"""Setup step: fetch issue, clone/verify repo, create branch."""
 
 from __future__ import annotations
 
 import json
-import yaml
 import os
 import shutil
+import stat
 import hashlib
 import subprocess
 from pathlib import Path
@@ -55,8 +55,6 @@ def _ensure_gitignore_entry(gitignore_path: Path, entry: str) -> None:
 def run_setup(
     issue_url: str,
     local_path: str | None = None,
-    config_path: str | None = None,
-    max_steps: int | None = None,
 ) -> Path:
     """
     Step 0 (pre-flight, deterministic — no agent).
@@ -64,65 +62,34 @@ def run_setup(
     1. Fetch issue via `gh issue view`; write ISSUE.md to run dir
     2. Clone repo if not already local, or verify local path is clean
     3. Create branch `agent/<hash>`; overwrite and log if it already exists
-    4. Populate STATE.json
 
     Returns run_dir (the .agent/<hash>/ directory inside repo root).
     """
     hash = _run_hash(issue_url)
 
-    # ------------------------------------------------------------------ #
     # 1. Determine / acquire repo root
-    # ------------------------------------------------------------------ #
     if local_path:
         repo_root = Path(local_path).resolve()
         _verify_clean_repo(repo_root)
     else:
         repo_root = _clone_repo(issue_url, hash)
 
-    # ------------------------------------------------------------------ #
     # 2. Initialise run directory and open trace
-    # ------------------------------------------------------------------ #
     run_dir = init_run(issue_url, repo_root)
     open_trace(run_dir)
 
-    # ------------------------------------------------------------------ #
     # 3. Fetch issue
-    # ------------------------------------------------------------------ #
     issue_md, issue_body = _fetch_issue(issue_url)
     (run_dir / "ISSUE.md").write_text(issue_md, encoding="utf-8")
-
-    # ------------------------------------------------------------------ #
+    
     # 4. Create feature branch
-    # ------------------------------------------------------------------ #
     branch_name = f"agent/{hash}"
     _create_branch(repo_root, branch_name)
-
-    # ------------------------------------------------------------------ #
-    # 5. Generate dynamic agent config
-    # ------------------------------------------------------------------ #
-    config_data: dict = {}
-    
-    # Try to load existing base config if provided
-    if config_path and Path(config_path).exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config_data = yaml.safe_load(f) or {}
-        except ImportError:
-            # Fallback if no yaml (not standard library, but mini-swe-agent usually brings it)
-            pass
-
-    if "agent" not in config_data:
-        config_data["agent"] = {}
-        
-    if max_steps is not None:
-        config_data["agent"]["max_steps"] = max_steps
 
     return run_dir
 
 
-# ---------------------------------------------------------------------------
 # Private helpers
-# ---------------------------------------------------------------------------
 
 def _verify_clean_repo(repo_root: Path) -> None:
     result = subprocess.run(
@@ -140,6 +107,12 @@ def _verify_clean_repo(repo_root: Path) -> None:
         )
 
 
+def _force_remove_readonly(func, path, _exc_info):
+    """onerror handler for shutil.rmtree: clear read-only bit and retry."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 def _clone_repo(issue_url: str, hash: str) -> Path:
     clone_dir = Path(".agent") / hash
     repo_url = issue_url.split("/issues/")[0]
@@ -147,7 +120,7 @@ def _clone_repo(issue_url: str, hash: str) -> Path:
     # Check if already cloned
     if clone_dir.exists():
         log_event(clone_dir, "overwriting_existing_issue", {"issue_url": issue_url, "hash": hash})
-        shutil.rmtree(clone_dir)
+        shutil.rmtree(clone_dir, onerror=_force_remove_readonly)
     clone_dir.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(
