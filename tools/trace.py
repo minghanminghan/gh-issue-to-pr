@@ -59,7 +59,10 @@ def add_span(run_dir: Path, span: Span | Any) -> None:
         # Silently create trace if not opened (e.g. resumed run)
         log.debug(f"No open trace for run_dir={run_dir}. Creating new trace.")
         open_trace(run_dir)
-    _open_traces[key]["spans"].append(asdict(span))
+    if isinstance(span, Span):
+        _open_traces[key]["spans"].append(asdict(span))
+    else:
+        _open_traces[key]["spans"].append(span)
     log.debug(f"Added span for run_dir={run_dir}: {span}")
 
 

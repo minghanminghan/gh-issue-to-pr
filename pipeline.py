@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import platform
 import logging
 from typing import Any
 from pathlib import Path
@@ -11,6 +12,7 @@ from datetime import datetime, timezone
 
 from minisweagent.agents.default import DefaultAgent
 from minisweagent.environments.local import LocalEnvironment
+from minisweagent.environments.extra.bubblewrap import BubblewrapEnvironment
 from minisweagent.models.litellm_model import LitellmModel
 from minisweagent.config import get_config_from_spec
 
@@ -18,6 +20,25 @@ from schema.config import AgentConfig
 from tools.logger import log_event
 from tools.setup import run_setup
 from tools.trace import close_trace, add_span, Span
+
+
+_OS_CONFIG_MAP = {
+    "linux":   "mswea_config_bash.yaml",
+    "darwin":  "mswea_config_bash.yaml",
+    "windows": "mswea_config_powershell.yaml",
+}
+
+
+def _get_config_for_os() -> dict:
+    os_name = platform.system().lower()
+    config_file = _OS_CONFIG_MAP.get(os_name)
+    if config_file is None:
+        print(
+            f"Error: unrecognized OS '{platform.system()}'. Supported: Linux, Darwin, Windows.",
+            file=sys.stderr,
+        )
+        sys.exit(3)
+    return get_config_from_spec(Path(config_file))
 
 
 MODEL_NAME = os.getenv("MODEL_NAME")
@@ -83,10 +104,13 @@ def _run_pipeline_steps(run_dir: Path, guidelines: str, agent_config: AgentConfi
 
     try:
         # 1. Initialize the environment pointing to the cloned repository
-        env = LocalEnvironment(repo_path=str(run_dir))
+        if platform.system().lower() == "linux":
+            env = BubblewrapEnvironment(cwd=str(run_dir))
+        else:
+            env = LocalEnvironment(cwd=str(run_dir))
 
         # 2. Load config and apply overrides
-        config = get_config_from_spec(Path("mswea_config.yaml"))
+        config = _get_config_for_os()
         config.setdefault("environment", {})["cwd"] = str(run_dir)
 
         if agent_config.get("model_name") is not None:
