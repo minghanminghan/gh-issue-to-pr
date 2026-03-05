@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import os
+import json
+from typing import Any
+from pathlib import Path
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -28,11 +29,13 @@ _open_traces: dict[str, dict] = {}
 
 @dataclass
 class Span:
+    message_number: int
     agent: str
+    thought: Any
+    commands: list[str]
     start_time: str  # ISO-8601
     end_time: str  # ISO-8601
-    tokens_in: int
-    tokens_out: int
+    usage: dict[str, Any]
     cost_usd: float
     tools_called: list[str] = field(default_factory=list)
 
@@ -49,7 +52,7 @@ def open_trace(run_dir: Path) -> None:
     log.debug(f"Trace opened for run_dir={run_dir}")
 
 
-def add_span(run_dir: Path, span: Span) -> None:
+def add_span(run_dir: Path, span: Span | Any) -> None:
     """Add a completed span to the open trace."""
     key = str(run_dir)
     if key not in _open_traces:
@@ -88,7 +91,7 @@ def close_trace(run_dir: Path, outcome: str, issue_url: str, agent_config: Agent
         "start_time": trace["start_time"],
         "end_time": datetime.now(timezone.utc).isoformat(),
         "steps": len(spans), # might be flaky
-        "max_steps": agent_config.max_steps, # might be None, should change upstream logic
+        # "max_steps": agent_config.max_steps, # might be None, should change upstream logic
         "total_tokens_in": total_tokens_in,
         "total_tokens_out": total_tokens_out,
         "total_cost_usd": total_cost,

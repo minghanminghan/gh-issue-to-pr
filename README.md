@@ -6,8 +6,6 @@ An AI agent pipeline that turns GitHub issues into pull requests. Given an issue
 
 This repo wraps [mini-swe-agent](https://mini-swe-agent.com/) by adding a webserver and gh CLI to give it access to Issues.
 
----
-
 ## Prerequisites
 
 - **Python 3.11+**

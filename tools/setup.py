@@ -7,6 +7,7 @@ import os
 import shutil
 import stat
 import hashlib
+import logging
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,10 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")  # must have repo access; used by 
 if not GITHUB_TOKEN:
     print("Error: GITHUB_TOKEN environment variable not set. Please set it to a GitHub Personal Access Token with repo access.", file=__import__("sys").stderr)
     raise ValueError("GITHUB_TOKEN environment variable not set.")
+
+
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
 
 
 def _run_hash(issue_url: str) -> str:
@@ -119,8 +124,8 @@ def _clone_repo(issue_url: str, hash: str) -> Path:
 
     # Check if already cloned
     if clone_dir.exists():
-        log_event(clone_dir, "overwriting_existing_issue", {"issue_url": issue_url, "hash": hash})
-        shutil.rmtree(clone_dir, onerror=_force_remove_readonly)
+        log.debug(f"overwriting_existing_issue at {clone_dir}")
+        shutil.rmtree(clone_dir, onexc=_force_remove_readonly)
     clone_dir.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(

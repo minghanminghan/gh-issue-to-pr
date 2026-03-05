@@ -1,9 +1,22 @@
-# copied from .venv/Lib/minisweagent/config/benchmarks/swebench.yaml
-# TODO: adjust to this repo
+# modified from .venv/Lib/minisweagent/config/benchmarks/swebench.yaml
+
+environment:
+  cwd: "." # TODO: dynamically set this
+  timeout: 60
+  interpreter: ["bash", "-c"]
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: "off"
+    TQDM_DISABLE: "1"
+  environment_class: local # docker
+
 
 agent:
   system_template: |
     You are a helpful assistant that can interact with a computer shell to solve programming tasks.
+    Your working directory is {{cwd}}. All changes must stay within this directory.
   instance_template: |
     <pr_description>
     Consider the following PR description:
@@ -68,7 +81,7 @@ agent:
 
     ## Environment Details
 
-    - You have a full Linux shell environment
+    - You have a full bash environment
     - Always use non-interactive flags (-y, -f) for commands
     - Avoid interactive tools like vi, nano, or any that require user input
     - You can use bash commands or invoke any tool that is available in the environment
@@ -114,18 +127,6 @@ agent:
     </instructions>
   step_limit: 250
   cost_limit: 3.
-
-environment:
-  cwd: "/testbed"
-  timeout: 60
-  interpreter: ["bash", "-c"]
-  env:
-    PAGER: cat
-    MANPAGER: cat
-    LESS: -R
-    PIP_PROGRESS_BAR: "off"
-    TQDM_DISABLE: "1"
-  environment_class: docker
 
 model:
   observation_template: |

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
-import json
 import logging
+from typing import Any
 from pathlib import Path
+from datetime import datetime, timezone
 
 from minisweagent.agents.default import DefaultAgent
 from minisweagent.environments.local import LocalEnvironment
@@ -14,7 +15,7 @@ from minisweagent.models.litellm_model import LitellmModel
 from minisweagent.config import get_config_from_spec
 
 from schema.config import AgentConfig
-from tools.logger import log_event, log_tool_call
+from tools.logger import log_event
 from tools.setup import run_setup
 from tools.trace import close_trace, add_span, Span
 
@@ -27,62 +28,12 @@ if not MODEL_NAME:
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
-
-class AgentTrackingHandler(logging.Handler):
-    """
-    Hooks into mini-swe-agent's logger to record spans and tool calls
-    for the pipeline's observability trace.
-    """
-    def __init__(self, run_dir: Path):
-        super().__init__()
-        self.run_dir = run_dir
-
-    def emit(self, record):
-        log.debug(record)
-
-        # mini-swe-agent emits lists of message dicts to agent.logger.debug
-        if not isinstance(record.msg, (list, tuple)):
-            return
-            
-        for msg in record.msg:
-            if not isinstance(msg, dict):
-                continue
-                
-            role = msg.get("role")
-            extra = msg.get("extra", {})
-            
-            # An assistant message contains model execution stats and planned actions
-            if role == "assistant" and "cost" in extra:
-                actions = extra.get("actions", [])
-                tools_called = [a.get("command", "unknown") for a in actions]
-                
-                span = Span(
-                    agent="mini-swe-agent",
-                    start_time=extra.get("timestamp", 0),  # In real implementation we'd format this
-                    end_time=extra.get("timestamp", 0),    # LitellmModel doesn't track start/end explicitly in msg
-                    tokens_in=extra.get("usage", {}).get("prompt_tokens", 0),
-                    tokens_out=extra.get("usage", {}).get("completion_tokens", 0),
-                    cost_usd=extra.get("cost", 0.0),
-                    tools_called=tools_called,
-                )
-                
-                # Format timestamps
-                from datetime import datetime, timezone
-                now_iso = datetime.now(timezone.utc).isoformat()
-                span.start_time = now_iso
-                span.end_time = now_iso
-                
-                add_span(self.run_dir, span)
-                
-            # A tool message contains the result of an action
-            elif role == "tool" and "raw_output" in extra:
-                log_tool_call(
-                    run_dir=self.run_dir,
-                    agent="mini-swe-agent",
-                    tool="bash",
-                    args_summary="bash command execution", # We'd need to extract original command, simplified for now
-                    ok=extra.get("returncode", 0) == 0,
-                )
+# Configure minisweagent loggers
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s"))
+logger = logging.getLogger("agent") # litellm_model
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 
 def run_pipeline(
@@ -124,41 +75,37 @@ def run_pipeline(
     return run_dir
 
 
-def _run_pipeline_steps(run_dir: Path, guidelines: str, agent_config: AgentConfig | None) -> str:
+def _run_pipeline_steps(run_dir: Path, guidelines: str, agent_config: AgentConfig | dict[str, Any]) -> str:
     """Inner pipeline loop using mini-swe-agent. Returns 'pass' or 'fail'."""
-    repo_root = run_dir.parent.parent
 
     # Step 1: Execute agent
     log_event(run_dir, "step_start", {"step": "agent"})
 
     try:
         # 1. Initialize the environment pointing to the cloned repository
-        env = LocalEnvironment(repo_path=str(repo_root))
+        env = LocalEnvironment(repo_path=str(run_dir))
 
         # 2. Load config and apply overrides
         config = get_config_from_spec(Path("mswea_config.yaml"))
-        if agent_config.model_name is not None:
-            config.setdefault("model", {})["model_name"] = agent_config.model_name
-        if agent_config.max_steps is not None:
-            config.setdefault("agent", {})["step_limit"] = agent_config.max_steps
+        config.setdefault("environment", {})["cwd"] = str(run_dir)
+
+        if agent_config.get("model_name") is not None:
+            config.setdefault("model", {})["model_name"] = agent_config["model_name"]
+        if agent_config.get("max_steps") is not None:
+            config.setdefault("agent", {})["step_limit"] = agent_config["max_steps"]
 
         # 3. Initialize the model (prefer config model_name over env var)
         effective_model = config.get("model", {}).get("model_name", MODEL_NAME)
         model = LitellmModel(model_name=effective_model)
+        
 
         agent_kwargs = config.get("agent", {})
         agent = DefaultAgent(model=model, env=env, **agent_kwargs)
-
-        # Hook up the tracking handler to the agent's logger
-        handler = AgentTrackingHandler(run_dir)
-        agent.logger.addHandler(handler)
-        agent.logger.setLevel(logging.DEBUG)
 
         # 4. Construct the prompt
         issue_path = run_dir / "ISSUE.md"
         issue_content = issue_path.read_text(encoding="utf-8")
         
-        # TODO: pass additional context to the agent (budget, max steps, etc. from args)
         prompt = [
             f"Here is an issue to resolve in this repository:\n\n{issue_content}",
             "\nPlease explore the repository, write code to fix the issue, and verify your changes by running tests.",
@@ -169,11 +116,57 @@ def _run_pipeline_steps(run_dir: Path, guidelines: str, agent_config: AgentConfi
             prompt.insert(1, f"\nHere are the contribution guidelines to follow:\n{guidelines}")
 
         # 5. Run the agent
-        print(f"Running mini-swe-agent with model {MODEL_NAME}...")
-        # (Assuming run() takes a string description or prompt - standard for swe-agent patterns)
-        # Based on snippet from readme: agent.run("Write a sudoku game")
-        agent.run("\n".join(prompt))
-        
+        result = agent.run("\n".join(prompt))
+        log.debug(f"Agent run result: {result}")
+
+        # Extract stats from serialized trajectory
+        data = agent.serialize()
+        model_stats = data["info"]["model_stats"]
+        log.debug(f"Model stats: instance_cost={model_stats['instance_cost']}, api_calls={model_stats['api_calls']}")
+
+        for idx, message in enumerate(data["messages"]):
+            role = message.get("role")
+            if role != "assistant":
+                continue
+            
+            # extra = message.get("extra", {})
+            # thought = message.get("content")
+            # # edge case: thought might be stored in provider_specific_fields
+            # # e.g. gemini: provider_specific_fields['thought_signature']
+
+            # actions = extra.get("actions", [])
+            # commands = [action.get("command") for action in actions if "command" in action]
+            # usage = extra.get("usage", {})
+            # # 'usage': {
+            #     # 'completion_tokens': 42,
+            #     # 'prompt_tokens': 8448,
+            #     # 'total_tokens': 8490,
+            #     # 'completion_tokens_details': {
+            #         # 'reasoning_tokens': 11, 'text_tokens': 31
+            #     # },
+            #     # 'prompt_tokens_details': {
+            #         # 'audio_tokens': None,
+            #         # 'cached_tokens': None,
+            #         # 'text_tokens': 8448,
+            #         # 'image_tokens': None
+            #     # },
+            #     # 'cache_read_input_tokens': None
+            # # }
+
+            # ts = extra.get("timestamp")
+            # ts_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else ""
+            # add_span(run_dir, Span(
+            #     message_number=idx,
+            #     agent=effective_model,
+            #     thought=thought,
+            #     commands=commands,
+            #     start_time=ts_iso,
+            #     end_time=ts_iso,
+            #     usage=usage,
+            #     cost_usd=extra.get("cost", 0.0),
+            #     tools_called=[a["command"] for a in extra.get("actions", [])],
+            # ))
+            add_span(run_dir, message)
         # Consider any run that doesn't explicitly crash as a pass for the pipeline outcome 
         # (observability tools will capture the specific SWE trajectory)
         return "pass"
