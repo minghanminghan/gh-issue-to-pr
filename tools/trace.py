@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry import trace as otel_trace
+from opentelemetry.trace import SpanKind
 
 # In-memory registry of open traces (keyed by run_dir string)
 _open_traces: dict[str, dict] = {}
@@ -22,9 +29,6 @@ class Span:
     tokens_out: int
     cost_usd: float
     tools_called: list[str] = field(default_factory=list)
-    files_read: list[str] = field(default_factory=list)
-    files_written: list[str] = field(default_factory=list)
-    outcome: str = "pass"  # "pass" | "fail"
 
 
 def open_trace(run_dir: Path) -> None:
@@ -99,14 +103,6 @@ def close_trace(run_dir: Path, outcome: str) -> None:
 def _export_to_phoenix(trace_json: dict, endpoint: str) -> None:
     """Export trace to Arize Phoenix via OTLP."""
     try:
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry import trace as otel_trace
-        from opentelemetry.trace import SpanKind
-        import time
-
         resource = Resource.create({"service.name": "gh-issue-to-pr"})
         provider = TracerProvider(resource=resource)
         exporter = OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")
@@ -138,6 +134,4 @@ def _export_to_phoenix(trace_json: dict, endpoint: str) -> None:
         provider.force_flush()
 
     except Exception as e:
-        # Non-fatal: log but don't crash the report step
-        import sys
         print(f"Warning: OTLP export to Phoenix failed: {e}", file=sys.stderr)

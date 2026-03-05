@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 
 def log_tool_call(
@@ -36,7 +35,7 @@ def log_tool_call(
 def log_event(
     run_dir: Path,
     event: str,
-    data: Optional[dict] = None,
+    data: dict[str, str] | None = None,
 ) -> None:
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),

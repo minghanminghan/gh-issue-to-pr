@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from pipeline import run_pipeline
 
 
 def _run_subcommand(args: argparse.Namespace) -> None:
@@ -22,14 +23,13 @@ def _run_subcommand(args: argparse.Namespace) -> None:
         print(f"Error: --guidelines file not found: {args.guidelines}", file=sys.stderr)
         sys.exit(2)
 
-    from pipeline import run_pipeline
-
     try:
         run_dir = run_pipeline(
-            repo_url=args.repo_url,
             issue_url=args.issue_url,
             guidelines_path=args.guidelines,
             local_path=args.local_path,
+            config_path=args.config,
+            max_steps=args.max_steps,
         )
         print(f"\nPipeline completed. Run artifacts: {run_dir}")
     except SystemExit as e:
@@ -54,8 +54,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py run https://github.com/owner/repo/issues/42 https://github.com/owner/repo
-  python main.py run https://github.com/owner/repo/issues/42 https://github.com/owner/repo \\
+  python main.py run https://github.com/owner/repo/issues/42
+  python main.py run https://github.com/owner/repo/issues/42 \\
       --local-path /path/to/local/repo --guidelines CONTRIBUTING.md --budget 5.00
   python main.py serve --host 0.0.0.0 --port 8080
 """,
@@ -66,7 +66,6 @@ Examples:
     # ---- 'run' subcommand (original behavior) ----
     run_parser = subparsers.add_parser("run", help="Run the pipeline on a GitHub issue")
     run_parser.add_argument("issue_url", help="Full GitHub issue URL (e.g. https://github.com/owner/repo/issues/42)")
-    run_parser.add_argument("repo_url", help="GitHub repo URL (e.g. https://github.com/owner/repo)")
     run_parser.add_argument(
         "--local-path",
         metavar="PATH",
@@ -76,6 +75,17 @@ Examples:
         "--guidelines",
         metavar="FILE",
         help="Path to contribution guidelines file (e.g. CONTRIBUTING.md)",
+    )
+    run_parser.add_argument(
+        "--config",
+        metavar="FILE",
+        help="Path to a custom agent configuration YAML file",
+    )
+    run_parser.add_argument(
+        "--max-steps",
+        type=int,
+        metavar="STEPS",
+        help="Maximum number of steps the mini-swe-agent can take",
     )
     run_parser.add_argument(
         "--budget",

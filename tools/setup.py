@@ -3,34 +3,72 @@
 from __future__ import annotations
 
 import json
+import yaml
 import os
+import shutil
+import hashlib
 import subprocess
 from pathlib import Path
 
-from schemas.state import Step
-from tools.state import init_run, read_state, write_state, _run_hash
+# from schema.state import Step
 from tools.trace import open_trace
+from tools.logger import log_event
+
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")  # must have repo access; used by gh CLI
 if not GITHUB_TOKEN:
-    raise ValueError("Error: GITHUB_TOKEN environment variable not set. Please set it to a GitHub Personal Access Token with repo access.", file=__import__("sys").stderr)
+    print("Error: GITHUB_TOKEN environment variable not set. Please set it to a GitHub Personal Access Token with repo access.", file=__import__("sys").stderr)
+    raise ValueError("GITHUB_TOKEN environment variable not set.")
+
+
+def _run_hash(issue_url: str) -> str:
+    return hashlib.sha256(issue_url.encode()).hexdigest()[:8]
+
+
+def init_run(issue_url: str, repo_root: Path) -> Path:
+    """Create run directory and add .agent/ to .gitignore."""
+    repo_root = Path(repo_root)
+    hash = _run_hash(issue_url)
+    agent_dir = repo_root / ".agent"
+    run_dir = agent_dir / hash
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Add .agent/ to .gitignore if not present
+    gitignore_path = repo_root / ".gitignore"
+    _ensure_gitignore_entry(gitignore_path, ".agent/")
+
+    return run_dir
+
+
+def _ensure_gitignore_entry(gitignore_path: Path, entry: str) -> None:
+    if gitignore_path.exists():
+        lines = gitignore_path.read_text().splitlines()
+        if entry in lines or entry.rstrip("/") in lines:
+            return
+        with open(gitignore_path, "a") as f:
+            f.write(f"\n{entry}\n")
+    else:
+        gitignore_path.write_text(f"{entry}\n")
+
 
 def run_setup(
-    repo_url: str,
     issue_url: str,
     local_path: str | None = None,
+    config_path: str | None = None,
+    max_steps: int | None = None,
 ) -> Path:
     """
     Step 0 (pre-flight, deterministic — no agent).
 
     1. Fetch issue via `gh issue view`; write ISSUE.md to run dir
     2. Clone repo if not already local, or verify local path is clean
-    3. Create branch `agent/<hash>`; fail loudly if it already exists
+    3. Create branch `agent/<hash>`; overwrite and log if it already exists
     4. Populate STATE.json
 
     Returns run_dir (the .agent/<hash>/ directory inside repo root).
     """
-    run_hash = _run_hash(issue_url)
+    hash = _run_hash(issue_url)
 
     # ------------------------------------------------------------------ #
     # 1. Determine / acquire repo root
@@ -39,12 +77,12 @@ def run_setup(
         repo_root = Path(local_path).resolve()
         _verify_clean_repo(repo_root)
     else:
-        repo_root = _clone_repo(repo_url, run_hash)
+        repo_root = _clone_repo(issue_url, hash)
 
     # ------------------------------------------------------------------ #
     # 2. Initialise run directory and open trace
     # ------------------------------------------------------------------ #
-    run_dir = init_run(repo_url, issue_url, repo_root)
+    run_dir = init_run(issue_url, repo_root)
     open_trace(run_dir)
 
     # ------------------------------------------------------------------ #
@@ -56,17 +94,28 @@ def run_setup(
     # ------------------------------------------------------------------ #
     # 4. Create feature branch
     # ------------------------------------------------------------------ #
-    branch_name = f"agent/{run_hash}"
+    branch_name = f"agent/{hash}"
     _create_branch(repo_root, branch_name)
 
     # ------------------------------------------------------------------ #
-    # 5. Update STATE.json
+    # 5. Generate dynamic agent config
     # ------------------------------------------------------------------ #
-    state = read_state(run_dir)
-    state.branch_name = branch_name
-    state.issue_body = issue_body
-    state.current_step = Step.plan
-    write_state(run_dir, state)
+    config_data: dict = {}
+    
+    # Try to load existing base config if provided
+    if config_path and Path(config_path).exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = yaml.safe_load(f) or {}
+        except ImportError:
+            # Fallback if no yaml (not standard library, but mini-swe-agent usually brings it)
+            pass
+
+    if "agent" not in config_data:
+        config_data["agent"] = {}
+        
+    if max_steps is not None:
+        config_data["agent"]["max_steps"] = max_steps
 
     return run_dir
 
@@ -91,21 +140,15 @@ def _verify_clean_repo(repo_root: Path) -> None:
         )
 
 
-def _clone_repo(repo_url: str, run_hash: str) -> Path:
-    clone_dir = Path(".agent") / f"repos" / run_hash
-    clone_dir.mkdir(parents=True, exist_ok=True)
+def _clone_repo(issue_url: str, hash: str) -> Path:
+    clone_dir = Path(".agent") / hash
+    repo_url = issue_url.split("/issues/")[0]
 
     # Check if already cloned
-    if (clone_dir / ".git").exists():
-        result = subprocess.run(
-            ["git", "fetch", "--quiet"],
-            cwd=clone_dir,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"git fetch failed: {result.stderr}")
-        return clone_dir.resolve()
+    if clone_dir.exists():
+        log_event(clone_dir, "overwriting_existing_issue", {"issue_url": issue_url, "hash": hash})
+        shutil.rmtree(clone_dir)
+    clone_dir.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(
         ["git", "clone", "--quiet", repo_url, str(clone_dir)],

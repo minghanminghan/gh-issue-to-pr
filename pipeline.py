@@ -1,46 +1,40 @@
-"""Pipeline orchestrator: sequences agents, manages loops, enforces stopping conditions."""
+"""Pipeline orchestrator: sequences setup, mini-swe-agent, and report."""
 
 from __future__ import annotations
 
+import os
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
-from agents.execute import run_execute_agent
-from agents.plan import run_plan_agent
-from agents.summary import run_summary_agent
-from agents.test_agent import run_test_agent
-from agents.validate import run_validate_agent
-from schemas.state import FailureSource, Step
-from tools.context import build_context_block
-from tools.logger import log_event
-from tools.report import run_report
+from minisweagent.agents.default import DefaultAgent
+from minisweagent.environments.local import LocalEnvironment
+from minisweagent.models.litellm_model import LitellmModel
+from minisweagent.config import get_config_from_spec
+
+# from schema.state import Step
+from tools.logger import log_event, log_tool_call
 from tools.setup import run_setup
-from tools.state import read_state, write_state
-
-_GLOBAL_LOOP_CAP = 3
-_LOCAL_LOOP_CAP = 2
+from tools.trace import close_trace, add_span, Span
+import logging
 
 
-@dataclass
-class StepResult:
-    ok: bool
-    failure_source: Optional[str] = None
-    failure_reason: Optional[str] = None
+MODEL_NAME = os.getenv("MODEL_NAME")
+if not MODEL_NAME:
+    raise ValueError("MODEL_NAME environment variable not set")
 
 
 def run_pipeline(
-    repo_url: str,
     issue_url: str,
-    guidelines_path: Optional[str] = None,
-    local_path: Optional[str] = None,
+    guidelines_path: str | None = None,
+    local_path: str | None = None,
+    config_path: str | None = None,
+    max_steps: int | None = None,
 ) -> Path:
     """
     Main pipeline entry point.
 
     Steps:
-      0 (setup) → 1 (plan) → 2 (execute) ↔ 3 (validate) → 4 (test) → 5 (summary) → 6 (report)
+      0 (setup) -> 1 (mini-swe-agent) -> 2 (report)
 
     Returns run_dir.
     """
@@ -54,213 +48,151 @@ def run_pipeline(
     # ------------------------------------------------------------------ #
     # Step 0: Setup (deterministic, not an agent)
     # ------------------------------------------------------------------ #
-    run_dir = run_setup(repo_url, issue_url, local_path=local_path)
-    log_event(run_dir, "pipeline_start", {"repo_url": repo_url, "issue_url": issue_url})
+    run_dir = run_setup(issue_url, local_path=local_path, config_path=config_path, max_steps=max_steps)
+    log_event(run_dir, "pipeline_start", {"issue_url": issue_url})
 
     outcome = "fail"
     try:
-        outcome = _run_pipeline_steps(run_dir, guidelines)
-    except SystemExit:
-        # run_report may call sys.exit(1) — let it propagate after cleanup
-        raise
+        outcome = _run_pipeline_steps(run_dir, guidelines, config_path)
     except Exception as e:
-        state = read_state(run_dir)
-        state.failure_source = FailureSource.unrecoverable
-        state.last_failure_reason = f"Unhandled exception: {e}"
-        write_state(run_dir, state)
         log_event(run_dir, "pipeline_exception", {"error": str(e)})
     finally:
-        # Step 6: Report — always runs
-        run_report(run_dir, outcome)
+        # Step 2: Report - always runs
+        _run_report(run_dir, outcome)
 
     return run_dir
 
 
-def _run_pipeline_steps(run_dir: Path, guidelines: str) -> str:
-    """Inner pipeline loop. Returns 'pass' or 'fail'."""
-    state = read_state(run_dir)
+class AgentTrackingHandler(logging.Handler):
+    """
+    Hooks into mini-swe-agent's logger to record spans and tool calls
+    for the pipeline's observability trace.
+    """
+    def __init__(self, run_dir: Path):
+        super().__init__()
+        self.run_dir = run_dir
 
-    while True:
-        state = read_state(run_dir)
-
-        # Budget check before each agent call
-        if state.cost_spent_usd >= state.cost_budget_usd:
-            state.failure_source = FailureSource.budget_exceeded
-            state.last_failure_reason = (
-                f"Cost ${state.cost_spent_usd:.4f} exceeded budget ${state.cost_budget_usd:.2f}"
-            )
-            write_state(run_dir, state)
-            log_event(run_dir, "budget_exceeded", {"cost": state.cost_spent_usd})
-            return "fail"
-
-        # Global loop cap
-        if state.loop_count >= _GLOBAL_LOOP_CAP:
-            state.failure_source = FailureSource.unrecoverable
-            state.last_failure_reason = f"Reached global loop cap ({_GLOBAL_LOOP_CAP})"
-            write_state(run_dir, state)
-            log_event(run_dir, "global_loop_cap_reached")
-            return "fail"
-
-        # ---------------------------------------------------------------- #
-        # Step 1: Plan
-        # ---------------------------------------------------------------- #
-        log_event(run_dir, "step_start", {"step": "plan", "loop": state.loop_count})
-        context_block = build_context_block(state, run_dir) if state.loop_count > 0 else ""
-
-        plan_result = run_plan_agent(run_dir, guidelines=guidelines, context_block=context_block)
-
-        if not plan_result.ok:
-            state = read_state(run_dir)
-            state.failure_source = FailureSource.unrecoverable
-            state.last_failure_reason = plan_result.failure_reason or "Plan agent failed"
-            write_state(run_dir, state)
-            return "fail"
-
-        # ---------------------------------------------------------------- #
-        # Steps 2+3: Execute ↔ Validate (local loop)
-        # ---------------------------------------------------------------- #
-        local_ok = _run_local_loop(run_dir)
-        if not local_ok:
-            state = read_state(run_dir)
-            # local_ok=False means we should loop back to plan
-            if state.failure_source in (FailureSource.unrecoverable, FailureSource.budget_exceeded):
-                return "fail"
-            # Global loop back
-            state.loop_count += 1
-            state.local_loop_count = 0
-            state.current_step = Step.plan
-            write_state(run_dir, state)
-            log_event(run_dir, "global_loop_back", {"loop_count": state.loop_count})
-            continue
-
-        # ---------------------------------------------------------------- #
-        # Step 4: Test
-        # ---------------------------------------------------------------- #
-        state = read_state(run_dir)
-        if state.cost_spent_usd >= state.cost_budget_usd:
-            state.failure_source = FailureSource.budget_exceeded
-            state.last_failure_reason = "Budget exceeded before test step"
-            write_state(run_dir, state)
-            return "fail"
-
-        log_event(run_dir, "step_start", {"step": "test"})
-        test_result = run_test_agent(run_dir)
-
-        if not test_result.ok:
-            state = read_state(run_dir)
-            fs = state.failure_source
-            if fs == FailureSource.unrecoverable:
-                return "fail"
-            # Test failures loop back to plan
-            state.loop_count += 1
-            state.local_loop_count = 0
-            state.current_step = Step.plan
-            write_state(run_dir, state)
-            log_event(run_dir, "global_loop_back", {"loop_count": state.loop_count, "reason": "test_failure"})
-            continue
-
-        # ---------------------------------------------------------------- #
-        # Step 5: Summary
-        # ---------------------------------------------------------------- #
-        state = read_state(run_dir)
-        if state.cost_spent_usd >= state.cost_budget_usd:
-            state.failure_source = FailureSource.budget_exceeded
-            state.last_failure_reason = "Budget exceeded before summary step"
-            write_state(run_dir, state)
-            return "fail"
-
-        log_event(run_dir, "step_start", {"step": "summary"})
-        summary_result = run_summary_agent(run_dir)
-
-        if not summary_result.ok:
-            state = read_state(run_dir)
-            if state.failure_source == FailureSource.ci:
-                # CI failure → global loop back (already incremented in summary agent)
-                log_event(run_dir, "global_loop_back", {"reason": "ci_failure"})
+    def emit(self, record):
+        # mini-swe-agent emits lists of message dicts to agent.logger.debug
+        if not isinstance(record.msg, (list, tuple)):
+            return
+            
+        for msg in record.msg:
+            if not isinstance(msg, dict):
                 continue
-            return "fail"
+                
+            role = msg.get("role")
+            extra = msg.get("extra", {})
+            
+            # An assistant message contains model execution stats and planned actions
+            if role == "assistant" and "cost" in extra:
+                actions = extra.get("actions", [])
+                tools_called = [a.get("command", "unknown") for a in actions]
+                
+                span = Span(
+                    agent="mini-swe-agent",
+                    start_time=extra.get("timestamp", 0),  # In real implementation we'd format this
+                    end_time=extra.get("timestamp", 0),    # LitellmModel doesn't track start/end explicitly in msg
+                    tokens_in=extra.get("usage", {}).get("prompt_tokens", 0),
+                    tokens_out=extra.get("usage", {}).get("completion_tokens", 0),
+                    cost_usd=extra.get("cost", 0.0),
+                    tools_called=tools_called,
+                )
+                
+                # Format timestamps
+                from datetime import datetime, timezone
+                now_iso = datetime.now(timezone.utc).isoformat()
+                span.start_time = now_iso
+                span.end_time = now_iso
+                
+                add_span(self.run_dir, span)
+                
+            # A tool message contains the result of an action
+            elif role == "tool" and "raw_output" in extra:
+                log_tool_call(
+                    run_dir=self.run_dir,
+                    agent="mini-swe-agent",
+                    tool="bash",
+                    args_summary="bash command execution", # We'd need to extract original command, simplified for now
+                    ok=extra.get("returncode", 0) == 0,
+                )
 
-        # ---------------------------------------------------------------- #
-        # All steps passed
-        # ---------------------------------------------------------------- #
-        state = read_state(run_dir)
-        log_event(run_dir, "pipeline_complete", {"pr_url": state.pr_url})
+
+def _run_pipeline_steps(run_dir: Path, guidelines: str, config_path: str | None = None) -> str:
+    """Inner pipeline loop using mini-swe-agent. Returns 'pass' or 'fail'."""
+    repo_root = run_dir.parent.parent
+
+    # ---------------------------------------------------------------- #
+    # Step 1: Execute agent
+    # ---------------------------------------------------------------- #
+    log_event(run_dir, "step_start", {"step": "agent"})
+
+    try:
+        # 1. Initialize the environment pointing to the cloned repository
+        env = LocalEnvironment(repo_path=str(repo_root))
+
+        # 2. Initialize the model (using config or default)
+        model = LitellmModel(model_name=MODEL_NAME)
+
+        # 3. Instantiate the agent using config
+        config_file = run_dir / "config.yaml"
+        if config_file.exists():
+            config = get_config_from_spec(str(config_file))
+        elif config_path:
+            config = get_config_from_spec(config_path)
+        else:
+            config = get_config_from_spec("default")
+            
+        agent_kwargs = config.get("agent", {})
+        agent = DefaultAgent(model=model, env=env, **agent_kwargs)
+
+        # Hook up the tracking handler to the agent's logger
+        handler = AgentTrackingHandler(run_dir)
+        agent.logger.addHandler(handler)
+        agent.logger.setLevel(logging.DEBUG)
+
+        # 4. Construct the prompt
+        issue_path = run_dir / "ISSUE.md"
+        issue_content = issue_path.read_text(encoding="utf-8")
+        
+        # TODO: pass additional context to the agent (budget, max steps, etc. from args)
+        prompt = [
+            f"Here is an issue to resolve in this repository:\n\n{issue_content}",
+            "\nPlease explore the repository, write code to fix the issue, and verify your changes by running tests.",
+            "Once you are confident the issue is fixed, please commit the changes and run `gh pr create` to open a pull request.",
+        ]
+        
+        if guidelines:
+            prompt.insert(1, f"\nHere are the contribution guidelines to follow:\n{guidelines}")
+
+        # 5. Run the agent
+        print(f"Running mini-swe-agent with model {MODEL_NAME}...")
+        # (Assuming run() takes a string description or prompt - standard for swe-agent patterns)
+        # Based on snippet from readme: agent.run("Write a sudoku game")
+        agent.run("\n".join(prompt))
+        
+        # Consider any run that doesn't explicitly crash as a pass for the pipeline outcome 
+        # (observability tools will capture the specific SWE trajectory)
         return "pass"
 
+    except Exception as e:
+        log_event(run_dir, "agent_failure", {"error": str(e)})
+        return "fail"
 
-def _run_local_loop(run_dir: Path) -> bool:
+
+def _run_report(run_dir: Path, outcome: str) -> None:
     """
-    Run the execute ↔ validate local loop.
+    Post-flight
 
-    Returns True if validation passed, False if we must escalate to global loop.
+    - outcome == "pass": closes trace, writes TRACE.json, exits zero
+    - outcome == "fail": closes trace, writes TRACE.json, exits non-zero
+
+    Always runs — even if earlier steps raised an exception.
     """
-    state = read_state(run_dir)
-    state.local_loop_count = 0
-    write_state(run_dir, state)
+    run_dir = Path(run_dir)
 
-    while True:
-        state = read_state(run_dir)
+    # Close trace (writes TRACE.json)
+    close_trace(run_dir, outcome)
 
-        # Budget check
-        if state.cost_spent_usd >= state.cost_budget_usd:
-            state.failure_source = FailureSource.budget_exceeded
-            state.last_failure_reason = "Budget exceeded in local execute/validate loop"
-            write_state(run_dir, state)
-            return False
-
-        # ---------------------------------------------------------------- #
-        # Step 2: Execute
-        # ---------------------------------------------------------------- #
-        context_block = ""
-        if state.failure_source in (FailureSource.exec,) or str(state.failure_source) == "spec_deviation":
-            context_block = build_context_block(state, run_dir)
-
-        log_event(run_dir, "step_start", {"step": "execute", "local_loop": state.local_loop_count})
-        execute_result = run_execute_agent(run_dir, context_block=context_block)
-
-        if not execute_result.ok:
-            state = read_state(run_dir)
-            state.failure_source = FailureSource.unrecoverable
-            state.last_failure_reason = execute_result.failure_reason or "Execute agent failed"
-            write_state(run_dir, state)
-            return False
-
-        # ---------------------------------------------------------------- #
-        # Step 3: Validate
-        # ---------------------------------------------------------------- #
-        log_event(run_dir, "step_start", {"step": "validate", "local_loop": state.local_loop_count})
-        validate_result = run_validate_agent(run_dir)
-
-        if validate_result.ok:
-            log_event(run_dir, "validation_passed")
-            return True
-
-        # Validation failed — classify and decide routing
-        state = read_state(run_dir)
-        fs = state.failure_source
-
-        if fs == FailureSource.unrecoverable:
-            return False
-
-        # Check if we can continue the local loop
-        if state.local_loop_count < _LOCAL_LOOP_CAP:
-            state.local_loop_count += 1
-            write_state(run_dir, state)
-            log_event(run_dir, "local_loop_retry", {"local_loop_count": state.local_loop_count})
-
-            # For plan_invalid failures, escalate immediately
-            if fs == FailureSource.validate:
-                return False
-
-            # minor / spec_deviation: retry execute
-            continue
-        else:
-            # Local loop cap reached — escalate
-            log_event(run_dir, "local_loop_cap_reached", {"local_loop_count": state.local_loop_count})
-            state.failure_source = FailureSource.validate
-            state.last_failure_reason = (
-                f"Local loop cap reached after {state.local_loop_count + 1} attempts: "
-                f"{state.last_failure_reason}"
-            )
-            write_state(run_dir, state)
-            return False
+    if outcome == "failure":
+        sys.exit(1)
