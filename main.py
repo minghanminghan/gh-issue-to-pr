@@ -6,49 +6,49 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
-load_dotenv()
 
+import tools.log  # configures logging before any other import
 from pipeline import run_pipeline
 
-
+log = tools.log.get_logger(__name__)
 
 def _run_subcommand(args: argparse.Namespace) -> None:
     """Execute the pipeline on a GitHub issue."""
     if not args.issue_url.startswith("https://github.com/"):
-        print("Error: issue_url must be a full GitHub URL (https://github.com/...)", file=sys.stderr)
+        log.error("Error: issue_url must be a full GitHub URL (https://github.com/...)")
         sys.exit(2)
 
     if args.local_path and not Path(args.local_path).is_dir():
-        print(f"Error: --local-path does not exist or is not a directory: {args.local_path}", file=sys.stderr)
+        log.error(f"Error: --local-path does not exist or is not a directory: {args.local_path}")
         sys.exit(2)
 
     if args.guidelines and not Path(args.guidelines).is_file():
-        print(f"Error: --guidelines file not found: {args.guidelines}", file=sys.stderr)
+        log.error(f"Error: --guidelines file not found: {args.guidelines}")
         sys.exit(2)
 
     try:
-        run_dir = run_pipeline(
+        run_pipeline(
             issue_url=args.issue_url,
             guidelines_path=args.guidelines,
             local_path=args.local_path,
             model_name=args.model_name,
             max_steps=args.max_steps,
         )
-        print(f"\nPipeline completed. Run artifacts: {run_dir}")
+        log.debug("\nPipeline completed.")
     except SystemExit as e:
         sys.exit(e.code)
     except KeyboardInterrupt:
-        print("\nInterrupted by user.", file=sys.stderr)
+        log.error("\nInterrupted by user.")
         sys.exit(130)
     except Exception as e:
-        print(f"\nPipeline error: {e}", file=sys.stderr)
+        log.error(f"\nPipeline error: {e}")
         sys.exit(1)
 
 
 def _serve_subcommand(args: argparse.Namespace) -> None:
     """Start the FastAPI/uvicorn web server."""
     import uvicorn
+
     uvicorn.run("server:app", host=args.host, port=args.port, reload=False)
 
 
@@ -69,7 +69,10 @@ Examples:
 
     # ---- 'run' subcommand (original behavior) ----
     run_parser = subparsers.add_parser("run", help="Run the pipeline on a GitHub issue")
-    run_parser.add_argument("issue_url", help="Full GitHub issue URL (e.g. https://github.com/owner/repo/issues/42)")
+    run_parser.add_argument(
+        "issue_url",
+        help="Full GitHub issue URL (e.g. https://github.com/owner/repo/issues/42)",
+    )
     run_parser.add_argument(
         "--local-path",
         metavar="PATH",
@@ -102,8 +105,12 @@ Examples:
 
     # ---- 'serve' subcommand ----
     serve_parser = subparsers.add_parser("serve", help="Start the HTTP API server")
-    serve_parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
-    serve_parser.add_argument("--port", type=int, default=8080, help="Bind port (default: 8080)")
+    serve_parser.add_argument(
+        "--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)"
+    )
+    serve_parser.add_argument(
+        "--port", type=int, default=8080, help="Bind port (default: 8080)"
+    )
     serve_parser.set_defaults(func=_serve_subcommand)
 
     args = parser.parse_args()

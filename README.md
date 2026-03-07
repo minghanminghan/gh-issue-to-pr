@@ -27,10 +27,12 @@ uv sync
 
 ## Usage
 
-### Optional: Phoenix to collect traces
+### Optional: Collect traces using OpenTelemetry
+e.g. using [Arize Phoenix](https://arize.com/docs/phoenix)
 
 ```bash
-phoenix serve (defaults to port 6006)
+uv install --group phoenix
+phoenix serve # defaults to port 6006
 ```
 
 ### Only run pipeline
@@ -177,7 +179,7 @@ Every agent call produces a **span** recorded in-memory and flushed to `TRACE.js
 - Token counts (input + output) and cost in USD
 - Tool calls made, files read, files written
 
-If `PHOENIX_COLLECTOR_ENDPOINT` is set, the full trace is exported via OTLP to a self-hosted [Arize Phoenix](https://docs.arize.com/phoenix) instance at the end of the run. The pipeline creates one root span (`pipeline_run`) with one child span per agent call.
+If `OTEL_COLLECTOR_ENDPOINT` is set, spans are exported via OTLP to any compatible collector (Arize Phoenix, Jaeger, Grafana Tempo, etc.). Each pipeline run creates one root span (`agent.run`) with one child span per LiteLLM call.
 
 ---
 
@@ -203,11 +205,3 @@ uv run pytest -v
 uv run pytest tests/test_tools.py -v
 uv run pytest tests/test_server.py -v
 ```
-
----
-
-## Evaluation (to be implemented)
-
-- [SWE-bench](https://www.swebench.com/)
-- [SWE-bench Verified](https://www.swebench.com/)
-- PullRequestBenchmark

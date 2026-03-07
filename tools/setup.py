@@ -7,47 +7,29 @@ import os
 import shutil
 import stat
 import hashlib
-import logging
 import subprocess
 from pathlib import Path
 
-# from schema.state import Step
-from tools.trace import open_trace
-from tools.logger import log_event
+from schema.issue import Issue
+from tools.log import get_logger
 
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")  # must have repo access; used by gh CLI
 if not GITHUB_TOKEN:
-    print("Error: GITHUB_TOKEN environment variable not set. Please set it to a GitHub Personal Access Token with repo access.", file=__import__("sys").stderr)
+    print(
+        "Error: GITHUB_TOKEN environment variable not set. Please set it to a GitHub Personal Access Token with repo access.",
+        file=__import__("sys").stderr,
+    )
     raise ValueError("GITHUB_TOKEN environment variable not set.")
 
 
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+log = get_logger(__name__)
 
 
 def _run_hash(issue_url: str) -> str:
-    return hashlib.sha256(issue_url.encode()).hexdigest()[:8]
-
-
-def init_run(issue_url: str, repo_root: Path) -> Path:
-    """Create run directory and add run/ to .gitignore."""
-    repo_root = Path(repo_root)
-    hash = _run_hash(issue_url)
-    log.debug(f"init_run: issue_url={issue_url!r}, hash={hash!r}, repo_root={repo_root}")
-    run_dir = repo_root / "run" / hash
-    artifact_dir = run_dir / ".agent"
-
-    log.debug(f"Creating artifact_dir: {artifact_dir}")
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-
-    # Add run/ to .gitignore if not present
-    gitignore_path = repo_root / ".gitignore"
-    log.debug(f"Ensuring run/ in .gitignore at {gitignore_path}")
-    _ensure_gitignore_entry(gitignore_path, "run/")
-
-    log.debug(f"init_run complete; artifact_dir={artifact_dir}")
-    return artifact_dir
+    hash = hashlib.sha256(issue_url.encode()).hexdigest()
+    log.debug(f"issue_url: {issue_url}, hash: {hash}, truncated: {hash[:8]}")
+    return hash[:8]
 
 
 def _ensure_gitignore_entry(gitignore_path: Path, entry: str) -> None:
@@ -64,7 +46,7 @@ def _ensure_gitignore_entry(gitignore_path: Path, entry: str) -> None:
 def run_setup(
     issue_url: str,
     local_path: str | None = None,
-) -> Path:
+) -> Issue: # TODO: returning str here might not be the best pattern, consider changing to None
     """
     Step 0 (pre-flight, deterministic — no agent).
 
@@ -72,11 +54,10 @@ def run_setup(
     2. Clone repo if not already local, or verify local path is clean
     3. Create branch `agent/<hash>`; overwrite and log if it already exists
 
-    Returns artifact_dir (the run/<hash>/.agent/ directory inside repo root).
+    Return issue as markdown (title, description)
     """
     log.debug(f"run_setup: issue_url={issue_url!r}, local_path={local_path!r}")
     hash = _run_hash(issue_url)
-    log.debug(f"Issue URL hash: {hash!r}")
 
     # 1. Determine / acquire repo root
     if local_path:
@@ -87,32 +68,24 @@ def run_setup(
     else:
         log.debug("No local_path provided; cloning repo")
         repo_root = _clone_repo(issue_url, hash)
-        log.debug(f"Repo cloned to: {repo_root}")
 
-    # 2. Initialise run directory and open trace
-    run_dir = init_run(issue_url, repo_root)
-    log.debug(f"Opening trace for run_dir={run_dir}")
-    open_trace(run_dir)
-
-    # 3. Fetch issue
-    log.debug(f"Fetching issue: {issue_url!r}")
+    # 2. Fetch issue
     issue_md, issue_body = _fetch_issue(issue_url)
-    log.debug(f"Issue fetched: {len(issue_md)} chars markdown, {len(issue_body)} chars body")
-    issue_file = run_dir / "ISSUE.md"
-    issue_file.write_text(issue_md, encoding="utf-8")
-    log.debug(f"ISSUE.md written to {issue_file}")
 
-    # 4. Create feature branch
+    # 3. Create feature branch
     branch_name = f"agent/{hash}"
-    log.debug(f"Creating branch: {branch_name!r} in {repo_root}")
     _create_branch(repo_root, branch_name)
-    log.debug(f"Branch {branch_name!r} ready")
 
-    log.debug(f"run_setup complete; returning run_dir={run_dir}")
-    return run_dir
+    return Issue(
+        url=issue_url,
+        repo=issue_url.split("/issues/")[0],
+        dir=repo_root,
+        desc=issue_md
+    )
 
 
 # Private helpers
+
 
 def _verify_clean_repo(repo_root: Path) -> None:
     log.debug(f"Verifying repo is clean: {repo_root}")
@@ -122,7 +95,9 @@ def _verify_clean_repo(repo_root: Path) -> None:
         capture_output=True,
         text=True,
     )
-    log.debug(f"git status --porcelain returncode={result.returncode}, stdout={result.stdout!r}")
+    log.debug(
+        f"git status --porcelain returncode={result.returncode}, stdout={result.stdout!r}"
+    )
     if result.returncode != 0:
         raise RuntimeError(f"git status failed: {result.stderr}")
     if result.stdout.strip():
@@ -140,6 +115,7 @@ def _force_remove_readonly(func, path, _exc_info):
 
 
 def _clone_repo(issue_url: str, hash: str) -> Path:
+    """Clone a repository and return the local path."""
     clone_dir = Path("run") / hash
     repo_url = issue_url.split("/issues/")[0]
     log.debug(f"_clone_repo: repo_url={repo_url!r}, clone_dir={clone_dir}")
@@ -149,7 +125,6 @@ def _clone_repo(issue_url: str, hash: str) -> Path:
         log.debug(f"Clone dir already exists at {clone_dir}; removing and re-cloning")
         shutil.rmtree(clone_dir, onexc=_force_remove_readonly)
     clone_dir.mkdir(parents=True, exist_ok=True)
-    log.debug(f"Clone dir created: {clone_dir}")
 
     log.debug(f"Running: git clone --quiet {repo_url} {clone_dir}")
     result = subprocess.run(
@@ -157,7 +132,7 @@ def _clone_repo(issue_url: str, hash: str) -> Path:
         capture_output=True,
         text=True,
     )
-    log.debug(f"git clone returncode={result.returncode}, stderr={result.stderr!r}")
+    # log.debug(f"git clone returncode={result.returncode}, stderr={result.stderr!r}")
     if result.returncode != 0:
         raise RuntimeError(f"git clone failed: {result.stderr}")
 
@@ -174,7 +149,9 @@ def _fetch_issue(issue_url: str) -> tuple[str, str]:
         capture_output=True,
         text=True,
     )
-    log.debug(f"gh issue view returncode={result.returncode}, stdout_len={len(result.stdout)}, stderr={result.stderr!r}")
+    log.debug(
+        f"gh issue view returncode={result.returncode}, stdout_len={len(result.stdout)}, stderr={result.stderr!r}"
+    )
     if result.returncode != 0:
         raise RuntimeError(f"gh issue view failed: {result.stderr}")
 
@@ -184,7 +161,9 @@ def _fetch_issue(issue_url: str) -> tuple[str, str]:
     number = data.get("number", "")
     url = data.get("url", issue_url)
     comments = data.get("comments", [])
-    log.debug(f"Issue fetched: number={number!r}, title={title!r}, comments={len(comments)}")
+    log.debug(
+        f"Issue fetched: number={number!r}, title={title!r}, comments={len(comments)}"
+    )
 
     md_lines = [
         f"# Issue #{number}: {title}",
@@ -220,7 +199,9 @@ def _create_branch(repo_root: Path, branch_name: str) -> None:
         capture_output=True,
         text=True,
     )
-    log.debug(f"git branch --list returncode={result.returncode}, stdout={result.stdout!r}")
+    log.debug(
+        f"git branch --list returncode={result.returncode}, stdout={result.stdout!r}"
+    )
     if result.stdout.strip():
         log.debug(f"Branch {branch_name!r} already exists; deleting it")
         print(
@@ -241,7 +222,9 @@ def _create_branch(repo_root: Path, branch_name: str) -> None:
         capture_output=True,
         text=True,
     )
-    log.debug(f"git checkout -b returncode={result.returncode}, stderr={result.stderr!r}")
+    log.debug(
+        f"git checkout -b returncode={result.returncode}, stderr={result.stderr!r}"
+    )
     if result.returncode != 0:
         raise RuntimeError(f"git checkout -b failed: {result.stderr}")
     log.debug(f"Branch {branch_name!r} created and checked out")

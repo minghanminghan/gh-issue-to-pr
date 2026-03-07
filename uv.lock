@@ -202,7 +202,7 @@ wheels = [
 
 [[package]]
 name = "arize-phoenix"
-version = "13.8.0"
+version = "13.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aioitertools" },
@@ -252,14 +252,14 @@ dependencies = [
     { name = "uvicorn" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5e/aa/f2a41438b69f8ed2b42962fb74b5767141397cc9784c87affd1a96aed478/arize_phoenix-13.8.0.tar.gz", hash = "sha256:99a4fb973f4eeea1fabd6a4033a4f0ad0aaed660a91790c98e65532c33448364", size = 2550935, upload-time = "2026-03-04T23:03:18.082Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/99/7c/61a5d18d37575a67dae6685e9769c31da08ed63f5e37682eb8c5c6dc6af1/arize_phoenix-13.9.0.tar.gz", hash = "sha256:2b8ef3a85ee09085b58262cb543b96cedbb4abfda32bb702ab9d78eeb1471376", size = 2572392, upload-time = "2026-03-07T04:13:28.034Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7a/c3/13da26ef076c81bb98ad5ea2dbf157aa6e9a254c7bd489ec8aa03e651a10/arize_phoenix-13.8.0-py3-none-any.whl", hash = "sha256:e548025fbe725120d802c4f44e3544dee44594ddf82cfbbd5b03ace12c64571a", size = 2789049, upload-time = "2026-03-04T23:03:15.698Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/46/4fa93754ce66808c3a37b527d58a8ddddc72049b300e2ca0a3c971c9f9d2/arize_phoenix-13.9.0-py3-none-any.whl", hash = "sha256:5fa57a9b41aafd4b72aadcd20b416c70d1b6d278dad45f7f543dd8eabadfab0e", size = 2810695, upload-time = "2026-03-07T04:13:26.106Z" },
 ]
 
 [[package]]
 name = "arize-phoenix-client"
-version = "1.30.0"
+version = "1.31.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -270,9 +270,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bd/e8/152018ea3810652c9e5c400f348cd8160d9710b84a613c99dac5b47becb1/arize_phoenix_client-1.30.0.tar.gz", hash = "sha256:d1f19e31a37ea82d8d60fccfe26428bd264f70ccfe96a369dc8f8d8bf18a7181", size = 143089, upload-time = "2026-03-02T17:48:13.477Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/fb/939f6036030f57f0fdc8218b9c73ca1356cd79e1542fbc07a234fc1984f3/arize_phoenix_client-1.31.0.tar.gz", hash = "sha256:15546c5552ab1e297de7dc7cd89728b24b7a00a1df6d6fbb37363230b467bd1e", size = 145170, upload-time = "2026-03-06T00:44:46.431Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/46/b4/ad12195aecf3d45c72cd656affa3c1ee42d3a5a7d70b9c3ae071a50ced2c/arize_phoenix_client-1.30.0-py3-none-any.whl", hash = "sha256:64aaf43ca323551bc581de5cd48bfa88e66c3fc73c4976ce6828cb111fee8617", size = 149833, upload-time = "2026-03-02T17:48:12.32Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/0b/f617a6c0cc78eaf6fb074f3e00399032d03ddc8ad1a444d973c7a9c32c16/arize_phoenix_client-1.31.0-py3-none-any.whl", hash = "sha256:930f0a0878135ed58fd29122a5569b08b2b762fa9787f5cb4f375e2a3406f278", size = 150735, upload-time = "2026-03-06T00:44:45.356Z" },
 ]
 
 [[package]]
@@ -865,12 +865,11 @@ name = "gh-issue-to-pr"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "arize-phoenix" },
-    { name = "arize-phoenix-otel" },
     { name = "dotenv" },
     { name = "fastapi" },
     { name = "litellm" },
     { name = "mini-swe-agent" },
+    { name = "openinference-instrumentation-litellm" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
@@ -885,15 +884,17 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruff" },
 ]
+phoenix = [
+    { name = "arize-phoenix" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "arize-phoenix", specifier = ">=13.8.0" },
-    { name = "arize-phoenix-otel", specifier = ">=0.1.0" },
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "litellm", specifier = ">=1.60.0" },
     { name = "mini-swe-agent", specifier = ">=2.2.6" },
+    { name = "openinference-instrumentation-litellm", specifier = ">=0.1.29" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.0.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -908,6 +909,7 @@ dev = [
     { name = "pytest-mock", specifier = ">=3.12.0" },
     { name = "ruff", specifier = ">=0.15.4" },
 ]
+phoenix = [{ name = "arize-phoenix", specifier = ">=13.9.0" }]
 
 [[package]]
 name = "googleapis-common-protos"
@@ -1928,6 +1930,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/89/25/26db627b2d1d13030fdfb23cfa4437d6bb7e9c7ee42a8ec22b50e64edb6d/openinference_instrumentation-0.1.45.tar.gz", hash = "sha256:71d58cf4a9849351ed2dccfcd023277e80d2c9326d7cb67017c8ec2062df4c9b", size = 23989, upload-time = "2026-02-24T05:59:42.222Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/41/a3/f652a6ae71f33800bce4dffb727e8e5b3b0061d4ac9b6b166f0fc3ca4ed7/openinference_instrumentation-0.1.45-py3-none-any.whl", hash = "sha256:ee4bf930b8133210d6a5eb5577ca097dd9926035676e8a3a5b2ebb7e4a1129da", size = 30118, upload-time = "2026-02-24T05:59:40.456Z" },
+]
+
+[[package]]
+name = "openinference-instrumentation-litellm"
+version = "0.1.29"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "openinference-instrumentation" },
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-sdk" },
+    { name = "setuptools" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d6/36/ca32f80bdcd341af2cd037f175a1bd664dcd732b180137eaae576293f512/openinference_instrumentation_litellm-0.1.29.tar.gz", hash = "sha256:a8f0c0db05c60feca680f2417fede88479e1eb3d26b22693b53c851bf7bdef7d", size = 74146, upload-time = "2026-01-08T20:57:06.917Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/02/ac08e08d417e772f2b10cc1ff04dbb7f5bada2d5aa96034b2217bd633b51/openinference_instrumentation_litellm-0.1.29-py3-none-any.whl", hash = "sha256:4ad3b77fc5a44a2db26c16cdc45e9b2b5095a41339cd2fe53cc146dfb028622a", size = 16834, upload-time = "2026-01-08T20:57:05.299Z" },
 ]
 
 [[package]]
@@ -3134,6 +3154,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/52/52/e57eceff0e342a1f50e274264ed47497b59e6a4e3118808ee58ddda7b74a/scipy-1.17.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:a77cbd07b940d326d39a1d1b37817e2ee4d79cb30e7338f3d0cddffae70fcaa2", size = 37682317, upload-time = "2026-02-23T00:22:18.513Z" },
     { url = "https://files.pythonhosted.org/packages/11/2f/b29eafe4a3fbc3d6de9662b36e028d5f039e72d345e05c250e121a230dd4/scipy-1.17.1-cp314-cp314t-win_amd64.whl", hash = "sha256:eb092099205ef62cd1782b006658db09e2fed75bffcae7cc0d44052d8aa0f484", size = 37345327, upload-time = "2026-02-23T00:22:24.442Z" },
     { url = "https://files.pythonhosted.org/packages/07/39/338d9219c4e87f3e708f18857ecd24d22a0c3094752393319553096b98af/scipy-1.17.1-cp314-cp314t-win_arm64.whl", hash = "sha256:200e1050faffacc162be6a486a984a0497866ec54149a01270adc8a59b7c7d21", size = 25489165, upload-time = "2026-02-23T00:22:29.563Z" },
+]
+
+[[package]]
+name = "setuptools"
+version = "82.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/f3/748f4d6f65d1756b9ae577f329c951cda23fb900e4de9f70900ced962085/setuptools-82.0.0.tar.gz", hash = "sha256:22e0a2d69474c6ae4feb01951cb69d515ed23728cf96d05513d36e42b62b37cb", size = 1144893, upload-time = "2026-02-08T15:08:40.206Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/c6/76dc613121b793286a3f91621d7b75a2b493e0390ddca50f11993eadf192/setuptools-82.0.0-py3-none-any.whl", hash = "sha256:70b18734b607bd1da571d097d236cfcfacaf01de45717d59e6e04b96877532e0", size = 1003468, upload-time = "2026-02-08T15:08:38.723Z" },
 ]
 
 [[package]]

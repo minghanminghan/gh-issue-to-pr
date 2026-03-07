@@ -1,147 +1,28 @@
-"""Observability: span model, trace aggregation, and OTLP export."""
+"""Run trace: writes TRACE.json after each pipeline run."""
 
 from __future__ import annotations
 
-import os
 import json
-from typing import Any
 from pathlib import Path
-from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry import trace as otel_trace
-from opentelemetry.trace import SpanKind
-
 from schema.config import AgentConfig
+from tools.log import get_logger
 
-import logging
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG) # TODO: change for prod
-
-
-# In-memory registry of open traces (keyed by run_dir string)
-_open_traces: dict[str, dict] = {}
+log = get_logger(__name__)
 
 
-@dataclass
-class Span:
-    message_number: int
-    agent: str
-    thought: Any
-    commands: list[str]
-    start_time: str  # ISO-8601
-    end_time: str  # ISO-8601
-    usage: dict[str, Any]
-    cost_usd: float
-    tools_called: list[str] = field(default_factory=list)
-
-
-def open_trace(run_dir: Path) -> None:
-    """Called by setup step: open a new trace for this run."""
-    key = str(run_dir)
-    _open_traces[key] = {
-        "run_id": Path(run_dir).name,
-        "start_time": datetime.now(timezone.utc).isoformat(),
-        "spans": [],
-    }
-    # log_event(run_dir, "trace_opened", {"run_id": Path(run_dir).name, "start_time": datetime.now(timezone.utc).isoformat(), "spans": []})
-    log.debug(f"Trace opened for run_dir={run_dir}")
-
-
-def add_span(run_dir: Path, span: Span | Any) -> None:
-    """Add a completed span to the open trace."""
-    key = str(run_dir)
-    if key not in _open_traces:
-        # Silently create trace if not opened (e.g. resumed run)
-        log.debug(f"No open trace for run_dir={run_dir}. Creating new trace.")
-        open_trace(run_dir)
-    if isinstance(span, Span):
-        _open_traces[key]["spans"].append(asdict(span))
-    else:
-        _open_traces[key]["spans"].append(span)
-    log.debug(f"Added span for run_dir={run_dir}: {span}")
-
-
-def close_trace(run_dir: Path, outcome: str, issue_url: str, agent_config: AgentConfig) -> None:
-    """
-    Called by the Report step. Writes TRACE.json and optionally exports to
-    Arize Phoenix via OTLP if PHOENIX_COLLECTOR_ENDPOINT is set.
-    """
+def close_trace(
+    run_dir: Path, outcome: str, issue_url: str, agent_config: AgentConfig
+) -> None:
+    """Write TRACE.json summarising the completed run."""
     run_dir = Path(run_dir)
-    key = str(run_dir)
-    trace = _open_traces.pop(key, {})
-
-    if not trace:
-        log.debug(f"No open trace found for run_dir={run_dir}. Creating empty trace.")
-        trace = {
-            "run_id": run_dir.name,
-            "start_time": datetime.now(timezone.utc).isoformat(),
-            "spans": [],
-        }
-
-    spans = trace.get("spans", [])
-    total_cost = sum(s.get("cost_usd", 0.0) for s in spans)
-    total_tokens_in = sum(s.get("tokens_in", 0) for s in spans)
-    total_tokens_out = sum(s.get("tokens_out", 0) for s in spans)
-
     trace_json = {
-        "run_id": trace["run_id"],
+        "run_id": run_dir.name,
         "issue_url": issue_url,
-        "start_time": trace["start_time"],
         "end_time": datetime.now(timezone.utc).isoformat(),
-        "steps": len(spans), # might be flaky
-        # "max_steps": agent_config.max_steps, # might be None, should change upstream logic
-        "total_tokens_in": total_tokens_in,
-        "total_tokens_out": total_tokens_out,
-        "total_cost_usd": total_cost,
         "outcome": outcome,
         "human_feedback": None,
-        "spans": spans,
     }
-
     (run_dir / "TRACE.json").write_text(json.dumps(trace_json, indent=2))
-
-    # Export to Arize Phoenix if configured
-    endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT")
-    if endpoint:
-        _export_to_phoenix(trace_json, endpoint)
-
-
-def _export_to_phoenix(trace_json: dict, endpoint: str) -> None:
-    """Export trace to Arize Phoenix via OTLP."""
-    try:
-        resource = Resource.create({"service.name": "gh-issue-to-pr"})
-        provider = TracerProvider(resource=resource)
-        exporter = OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")
-        provider.add_span_processor(BatchSpanProcessor(exporter))
-        otel_trace.set_tracer_provider(provider)
-
-        tracer = otel_trace.get_tracer("gh-issue-to-pr")
-
-        with tracer.start_as_current_span(
-            "pipeline_run",
-            kind=SpanKind.INTERNAL,
-        ) as root_span:
-            root_span.set_attribute("run_id", trace_json["run_id"])
-            root_span.set_attribute("issue_url", trace_json["issue_url"])
-            root_span.set_attribute("outcome", trace_json["outcome"])
-            root_span.set_attribute("total_cost_usd", trace_json["total_cost_usd"])
-
-            for span_data in trace_json["spans"]:
-                with tracer.start_as_current_span(
-                    f"agent.{span_data['agent']}",
-                    kind=SpanKind.INTERNAL,
-                ) as span:
-                    span.set_attribute("tokens_in", span_data.get("tokens_in", 0))
-                    span.set_attribute("tokens_out", span_data.get("tokens_out", 0))
-                    span.set_attribute("cost_usd", span_data.get("cost_usd", 0.0))
-                    span.set_attribute("outcome", span_data.get("outcome", "unknown"))
-
-        provider.force_flush()
-
-    except Exception as e:
-        log.warning(f"Warning: OTLP export to Phoenix failed: {e}")
+    log.debug(f"TRACE.json written to {run_dir / 'TRACE.json'}")

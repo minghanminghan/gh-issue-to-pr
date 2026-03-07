@@ -1,144 +1,92 @@
 import json
-import logging
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 import pytest
-import os
 
-from pipeline import _run_report, run_pipeline, AgentTrackingHandler, _run_pipeline_steps
+from pipeline import _run_report, run_pipeline, _run_pipeline_steps
+from schema.issue import Issue
 
 
-def _make_run_dir(tmp_path: Path) -> Path:
-    run_dir = tmp_path / "run" / "abc12345" / ".agent"
-    run_dir.mkdir(parents=True)
-    return run_dir
+def _make_issue(tmp_path: Path) -> Issue:
+    repo_dir = tmp_path / "run" / "abc12345"
+    repo_dir.mkdir(parents=True)
+    return Issue(
+        url="https://github.com/owner/repo/issues/1",
+        repo="https://github.com/owner/repo",
+        dir=repo_dir,
+        desc="# Issue #1: Fix the bug\n\n## Description\n\nfix the bug",
+    )
 
 
 class TestRunReport:
-    def test_pass_outcome_writes_trace_json(self, tmp_path):
-        run_dir = _make_run_dir(tmp_path)
-        _run_report(run_dir, "pass")
-        assert (run_dir / "TRACE.json").exists()
-
-    def test_fail_outcome_exits_early(self, tmp_path):
-        run_dir = _make_run_dir(tmp_path)
-        with pytest.raises(SystemExit) as exc_info:
-            _run_report(run_dir, "failure")
-        assert exc_info.value.code == 1
+    def test_writes_trace_json(self, tmp_path):
+        issue = _make_issue(tmp_path)
+        _run_report(issue, "pass", MagicMock())
+        assert (issue["dir"] / "TRACE.json").exists()
 
     def test_trace_json_outcome_pass(self, tmp_path):
-        run_dir = _make_run_dir(tmp_path)
-        _run_report(run_dir, "pass")
-        trace = json.loads((run_dir / "TRACE.json").read_text())
+        issue = _make_issue(tmp_path)
+        _run_report(issue, "pass", MagicMock())
+        trace = json.loads((issue["dir"] / "TRACE.json").read_text())
         assert trace["outcome"] == "pass"
 
-    def test_trace_json_outcome_fail(self, tmp_path):
-        run_dir = _make_run_dir(tmp_path)
-        with pytest.raises(SystemExit):
-            _run_report(run_dir, "failure")
-        trace = json.loads((run_dir / "TRACE.json").read_text())
-        assert trace["outcome"] == "failure"
-
-
-class TestAgentTrackingHandler:
-    @patch("pipeline.add_span")
-    def test_emit_assistant_msg(self, mock_add_span, tmp_path):
-        run_dir = _make_run_dir(tmp_path)
-        handler = AgentTrackingHandler(run_dir)
-        
-        record = logging.LogRecord(
-            name="test", level=logging.DEBUG, pathname="", lineno=0,
-            msg=[{
-                "role": "assistant",
-                "extra": {
-                    "cost": 0.05,
-                    "timestamp": "old_timestamp",
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 20},
-                    "actions": [{"command": "ls"}]
-                }
-            }],
-            args=(), exc_info=None
-        )
-        handler.emit(record)
-        mock_add_span.assert_called_once()
-        span_arg = mock_add_span.call_args[0][1]
-        assert span_arg.agent == "mini-swe-agent"
-        assert span_arg.tokens_in == 10
-        assert span_arg.tokens_out == 20
-        assert span_arg.cost_usd == 0.05
-        assert span_arg.tools_called == ["ls"]
-
-    @patch("pipeline.log_tool_call")
-    def test_emit_tool_msg(self, mock_log_tool_call, tmp_path):
-        run_dir = _make_run_dir(tmp_path)
-        handler = AgentTrackingHandler(run_dir)
-        
-        record = logging.LogRecord(
-            name="test", level=logging.DEBUG, pathname="", lineno=0,
-            msg=[{
-                "role": "tool",
-                "extra": {
-                    "raw_output": "success",
-                    "returncode": 0
-                }
-            }],
-            args=(), exc_info=None
-        )
-        handler.emit(record)
-        mock_log_tool_call.assert_called_once()
-        kwargs = mock_log_tool_call.call_args[1]
-        assert kwargs["run_dir"] == run_dir
-        assert kwargs["agent"] == "mini-swe-agent"
-        assert kwargs["tool"] == "bash"
-        assert kwargs["ok"] is True
+    def test_exits_for_failure_outcome(self, tmp_path):
+        issue = _make_issue(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            _run_report(issue, "failure", MagicMock())
+        assert exc_info.value.code == 1
 
 
 @patch("pipeline.run_setup")
 @patch("pipeline._run_pipeline_steps")
 @patch("pipeline._run_report")
-@patch("pipeline.log_event")
-def test_run_pipeline(mock_log, mock_run_report, mock_run_steps, mock_run_setup, tmp_path):
-    run_dir = _make_run_dir(tmp_path)
-    mock_run_setup.return_value = run_dir
-    mock_run_steps.return_value = "pass"
-    
-    guideline_path = tmp_path / "CONTRIBUTING.md"
-    guideline_path.write_text("be nice")
-    
-    result = run_pipeline(
-        issue_url="http://github",
-        guidelines_path=str(guideline_path),
-        local_path=str(tmp_path)
+def test_run_pipeline(mock_report, mock_steps, mock_setup, tmp_path):
+    issue = _make_issue(tmp_path)
+    mock_setup.return_value = issue
+    mock_steps.return_value = "pass"
+
+    run_pipeline(
+        issue_url="https://github.com/owner/repo/issues/1",
+        guidelines_path=None,
+        local_path=str(tmp_path),
+        model_name=None,
+        max_steps=None,
     )
-    
-    assert result == run_dir
-    mock_run_setup.assert_called_once_with(
-        "http://github", local_path=str(tmp_path), config_path=None, max_steps=None
+
+    mock_setup.assert_called_once_with(
+        "https://github.com/owner/repo/issues/1", local_path=str(tmp_path)
     )
-    mock_run_steps.assert_called_once_with(run_dir, "be nice", None)
-    mock_run_report.assert_called_once_with(run_dir, "pass")
+    mock_steps.assert_called_once()
+    mock_report.assert_called_once()
 
 
-@patch("pipeline.log_event")
+@patch("pipeline.platform.system", return_value="Darwin")
+@patch("pipeline.otel_trace")
 @patch("pipeline.LocalEnvironment")
 @patch("pipeline.LitellmModel")
 @patch("pipeline.get_config_from_spec")
 @patch("pipeline.DefaultAgent")
-def test_run_pipeline_steps(mock_agent_cls, mock_get_config, mock_model, mock_env, mock_log_event, tmp_path):
-    run_dir = _make_run_dir(tmp_path)
-    
-    (run_dir / "ISSUE.md").write_text("fix bug")
-    
-    mock_config = {"agent": {"some_arg": "value"}}
-    mock_get_config.return_value = mock_config
-    
+def test_run_pipeline_steps(
+    mock_agent_cls, mock_get_config, mock_model, mock_env, mock_otel, mock_platform, tmp_path
+):
+    issue = _make_issue(tmp_path)
+
+    mock_get_config.return_value = {"agent": {}}
     mock_agent = MagicMock()
     mock_agent_cls.return_value = mock_agent
-    
-    res = _run_pipeline_steps(run_dir, guidelines="guidelines text", config_path=None)
-    
-    assert res == "pass"
-    mock_agent.run.assert_called_once()
-    assert "guidelines text" in mock_agent.run.call_args[0][0]
-    assert "fix bug" in mock_agent.run.call_args[0][0]
 
+    mock_span = MagicMock()
+    mock_tracer = MagicMock()
+    mock_tracer.start_as_current_span.return_value.__enter__ = MagicMock(return_value=mock_span)
+    mock_tracer.start_as_current_span.return_value.__exit__ = MagicMock(return_value=False)
+    mock_otel.get_tracer.return_value = mock_tracer
+
+    result = _run_pipeline_steps(
+        issue, guidelines="be nice", agent_config={"model_name": None, "max_steps": None}
+    )
+
+    assert result == "pass"
+    mock_agent.run.assert_called_once()
+    prompt = mock_agent.run.call_args[0][0]
+    assert "fix the bug" in prompt
+    assert "be nice" in prompt
