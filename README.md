@@ -8,7 +8,7 @@ This repo wraps [mini-swe-agent](https://mini-swe-agent.com/) by adding a webser
 
 ## Prerequisites
 
-- **Python 3.11+**
+- **Python 3.12+**
 - **[uv](https://docs.astral.sh/uv/)**
 - **[gh CLI](https://cli.github.com/)**
 - **[mini-swe-agent](https://mini-swe-agent.com/)**
