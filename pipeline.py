@@ -121,17 +121,18 @@ def _run_pipeline_steps(run_dir: Path, guidelines: str, agent_config: AgentConfi
     try:
         # 1. Initialize the environment pointing to the cloned repository
         current_os = platform.system().lower()
-        log.debug(f"Initializing environment for OS={current_os!r}, cwd={run_dir}")
+        agent_cwd = run_dir.parent  # run/<hash>/ — the repo the agent works in
+        log.debug(f"Initializing environment for OS={current_os!r}, cwd={agent_cwd}")
         if current_os == "linux":
-            env = BubblewrapEnvironment(cwd=str(run_dir))
+            env = BubblewrapEnvironment(cwd=str(agent_cwd))
             log.debug("Using BubblewrapEnvironment (Linux sandbox)")
         else:
-            env = LocalEnvironment(cwd=str(run_dir))
+            env = LocalEnvironment(cwd=str(agent_cwd))
             log.debug("Using LocalEnvironment")
 
         # 2. Load config and apply overrides
         config = _get_config_for_os()
-        config.setdefault("environment", {})["cwd"] = str(run_dir)
+        config.setdefault("environment", {})["cwd"] = str(agent_cwd)
         log.debug(f"Config loaded; setting environment.cwd={run_dir}")
 
         if agent_config.get("model_name") is not None:

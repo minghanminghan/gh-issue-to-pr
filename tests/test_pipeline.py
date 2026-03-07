@@ -9,7 +9,7 @@ from pipeline import _run_report, run_pipeline, AgentTrackingHandler, _run_pipel
 
 
 def _make_run_dir(tmp_path: Path) -> Path:
-    run_dir = tmp_path / ".agent" / "abc12345"
+    run_dir = tmp_path / "run" / "abc12345" / ".agent"
     run_dir.mkdir(parents=True)
     return run_dir
 

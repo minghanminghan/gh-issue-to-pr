@@ -38,7 +38,7 @@ def test_init_run_correct_hash():
     with tempfile.TemporaryDirectory() as tmpdir:
         repo_root = Path(tmpdir)
         run_dir = init_run(issue_url, repo_root)
-        assert run_dir.name == expected_hash
+        assert run_dir.parent.name == expected_hash
 
 
 def test_init_run_idempotent():
@@ -56,17 +56,17 @@ def test_init_run_adds_gitignore_entry():
         init_run("https://github.com/x/y/issues/1", repo_root)
         gitignore = repo_root / ".gitignore"
         assert gitignore.exists()
-        assert ".agent/" in gitignore.read_text()
+        assert "run/" in gitignore.read_text()
 
 
 def test_init_run_does_not_duplicate_gitignore_entry():
     with tempfile.TemporaryDirectory() as tmpdir:
         repo_root = Path(tmpdir)
         gitignore = repo_root / ".gitignore"
-        gitignore.write_text(".agent/\n")
+        gitignore.write_text("run/\n")
         init_run("https://github.com/x/y/issues/1", repo_root)
         content = gitignore.read_text()
-        assert content.count(".agent/") == 1
+        assert content.count("run/") == 1
 
 
 def test_init_run_returns_correct_path():
@@ -74,7 +74,8 @@ def test_init_run_returns_correct_path():
         repo_root = Path(tmpdir)
         issue_url = "https://github.com/x/y/issues/1"
         run_dir = init_run(issue_url, repo_root)
-        assert run_dir.name == _run_hash(issue_url)
+        assert run_dir.name == ".agent"
+        assert run_dir.parent.name == _run_hash(issue_url)
 
 
 @patch("tools.setup.subprocess.run")
@@ -82,7 +83,7 @@ def test_clone_repo_collision_overwrites(mock_run, monkeypatch, tmp_path):
     mock_run.return_value.returncode = 0
     monkeypatch.chdir(tmp_path)
     run_hash = "abcdef12"
-    clone_dir = Path(".agent") / run_hash
+    clone_dir = Path("run") / run_hash
     clone_dir.mkdir(parents=True, exist_ok=True)
     
     _clone_repo("https://github.com/repo/issues/1", run_hash)

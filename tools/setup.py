@@ -31,23 +31,23 @@ def _run_hash(issue_url: str) -> str:
 
 
 def init_run(issue_url: str, repo_root: Path) -> Path:
-    """Create run directory and add .agent/ to .gitignore."""
+    """Create run directory and add run/ to .gitignore."""
     repo_root = Path(repo_root)
     hash = _run_hash(issue_url)
     log.debug(f"init_run: issue_url={issue_url!r}, hash={hash!r}, repo_root={repo_root}")
-    agent_dir = repo_root / ".agent"
-    run_dir = agent_dir / hash
+    run_dir = repo_root / "run" / hash
+    artifact_dir = run_dir / ".agent"
 
-    log.debug(f"Creating run_dir: {run_dir}")
-    run_dir.mkdir(parents=True, exist_ok=True)
+    log.debug(f"Creating artifact_dir: {artifact_dir}")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    # Add .agent/ to .gitignore if not present
+    # Add run/ to .gitignore if not present
     gitignore_path = repo_root / ".gitignore"
-    log.debug(f"Ensuring .agent/ in .gitignore at {gitignore_path}")
-    _ensure_gitignore_entry(gitignore_path, ".agent/")
+    log.debug(f"Ensuring run/ in .gitignore at {gitignore_path}")
+    _ensure_gitignore_entry(gitignore_path, "run/")
 
-    log.debug(f"init_run complete; run_dir={run_dir}")
-    return run_dir
+    log.debug(f"init_run complete; artifact_dir={artifact_dir}")
+    return artifact_dir
 
 
 def _ensure_gitignore_entry(gitignore_path: Path, entry: str) -> None:
@@ -72,7 +72,7 @@ def run_setup(
     2. Clone repo if not already local, or verify local path is clean
     3. Create branch `agent/<hash>`; overwrite and log if it already exists
 
-    Returns run_dir (the .agent/<hash>/ directory inside repo root).
+    Returns artifact_dir (the run/<hash>/.agent/ directory inside repo root).
     """
     log.debug(f"run_setup: issue_url={issue_url!r}, local_path={local_path!r}")
     hash = _run_hash(issue_url)
@@ -140,7 +140,7 @@ def _force_remove_readonly(func, path, _exc_info):
 
 
 def _clone_repo(issue_url: str, hash: str) -> Path:
-    clone_dir = Path(".agent") / hash
+    clone_dir = Path("run") / hash
     repo_url = issue_url.split("/issues/")[0]
     log.debug(f"_clone_repo: repo_url={repo_url!r}, clone_dir={clone_dir}")
 

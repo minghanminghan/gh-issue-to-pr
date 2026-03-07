@@ -70,7 +70,7 @@ python main.py run https://github.com/<user>/<repo>/issues/<issue> \
 The pipeline prints the run artifact directory on completion:
 
 ```bash
-Pipeline completed. Run artifacts: <root>/.agent/<hash>/
+Pipeline completed. Run artifacts: <root>/run/<hash>/
 ```
 
 ### Run webserver
@@ -152,7 +152,7 @@ curl "http://127.0.0.1:8080/status?issue=https://github.com/owner/repo/issues/42
 |-------|------|-------------|
 | `status` | string | `"queued"`, `"running"`, `"completed"`, or `"failed"` |
 | `issue_url` | string | The issue URL |
-| `run_dir` | string \| null | Path to the `.agent/<hash>/` run directory once known |
+| `run_dir` | string \| null | Path to the `run/<hash>/` run directory once known |
 | `outcome` | string \| null | `"pass"` or `"fail"` once complete |
 | `error` | string \| null | Error message if an unexpected exception occurred |
 
@@ -160,7 +160,7 @@ curl "http://127.0.0.1:8080/status?issue=https://github.com/owner/repo/issues/42
 
 ## Run artifacts
 
-Every run creates a directory at `<repo_root>/.agent/<hash>/` (`.agent/` is gitignored). The hash is the first 8 hex characters of the SHA-256 of the issue URL, so re-running the same issue always maps to the same directory. If a hash collision occurs, the existing run directory is overwritten.
+Every run creates a directory at `<root>/run/<hash>/` (`run/` is gitignored). The hash is the first 8 hex characters of the SHA-256 of the issue URL, so re-running the same issue always maps to the same directory. If a hash collision occurs, the existing run directory is overwritten.
 
 | File | Written by | Contents |
 |------|-----------|----------|
