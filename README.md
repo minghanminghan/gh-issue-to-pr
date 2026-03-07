@@ -2,10 +2,6 @@
 
 An AI agent pipeline that turns GitHub issues into pull requests. Given an issue URL, it autonomously reads the codebase, plans changes, writes code, validates it, runs tests, and opens a PR -- all using an LLM via LiteLLM.
 
-## How it works
-
-This repo wraps [mini-swe-agent](https://mini-swe-agent.com/) by adding a webserver and gh CLI to give it access to Issues.
-
 ## Prerequisites
 
 - **Python 3.12+**
