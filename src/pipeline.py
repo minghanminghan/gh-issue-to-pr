@@ -45,7 +45,7 @@ def _get_config_for_os() -> dict:
         )
         sys.exit(3)
     log.debug(f"Loading OS config from: {config_file}")
-    return get_config_from_spec(Path(config_file))
+    return get_config_from_spec(Path(__file__).parent / config_file)
 
 
 MODEL_NAME = os.getenv("MODEL_NAME")
