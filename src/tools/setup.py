@@ -32,21 +32,10 @@ def _run_hash(issue_url: str) -> str:
     return hash[:8]
 
 
-def _ensure_gitignore_entry(gitignore_path: Path, entry: str) -> None:
-    if gitignore_path.exists():
-        lines = gitignore_path.read_text().splitlines()
-        if entry in lines or entry.rstrip("/") in lines:
-            return
-        with open(gitignore_path, "a") as f:
-            f.write(f"\n{entry}\n")
-    else:
-        gitignore_path.write_text(f"{entry}\n")
-
-
 def run_setup(
     issue_url: str,
     local_path: str | None = None,
-) -> Issue: # TODO: returning str here might not be the best pattern, consider changing to None
+) -> Issue:
     """
     Step 0 (pre-flight, deterministic — no agent).
 

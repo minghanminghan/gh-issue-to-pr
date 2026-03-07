@@ -79,7 +79,7 @@ def run_pipeline(
             guidelines = Path(guidelines_path).read_text(encoding="utf-8")
             log.debug(f"Guidelines loaded: {len(guidelines)} chars")
         except Exception as e:
-            print(f"Warning: could not read guidelines file: {e}", file=sys.stderr)
+            log.error(f"Warning: could not read guidelines file: {e}")
     else:
         log.debug("No guidelines path provided; skipping guidelines")
 
