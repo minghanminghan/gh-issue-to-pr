@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import platform
+import subprocess
 from typing import Any
 from pathlib import Path
 
@@ -93,6 +94,9 @@ def run_pipeline(
     try:
         outcome = _run_pipeline_steps(issue, guidelines, agent_config)
         log.debug(f"Pipeline steps finished with outcome={outcome!r}")
+        if outcome == "pass":
+            pr_url = _push_pr(issue)
+            log.debug(f"PR created: {pr_url}")
     except Exception as e:
         log.debug(f"Pipeline steps raised exception: {e!r}")
         # log_event(run_dir, "pipeline_exception", {"error": str(e)})
@@ -112,14 +116,14 @@ def _run_pipeline_steps(
     try:
         # 1. Initialize the environment pointing to the cloned repository
         current_os = platform.system().lower()
-        agent_cwd = issue['dir'].parent  # run/<hash>/ — the repo the agent works in
+        agent_cwd = issue['dir']        # run/<hash>/ — the repo the agent works in
         log.debug(f"Initializing environment for OS={current_os!r}, cwd={agent_cwd}")
         if current_os == "linux":
             env = BubblewrapEnvironment(cwd=str(agent_cwd))
-            log.debug("Using BubblewrapEnvironment (Linux sandbox)")
+            log.debug(f"Using BubblewrapEnvironment with cwd={agent_cwd}")
         else:
             env = LocalEnvironment(cwd=str(agent_cwd))
-            log.debug("Using LocalEnvironment")
+            log.debug(f"Using LocalEnvironment with cwd={agent_cwd}")
 
         # 2. Load config and apply overrides
         config = _get_config_for_os()
@@ -170,6 +174,35 @@ def _run_pipeline_steps(
         log.debug(f"Agent failure details: type={type(e).__name__}, args={e.args!r}")
         # log_event(run_dir, "agent_failure", {"error": str(e)})
         return "fail"
+
+
+def _push_pr(issue: Issue) -> str:
+    """Push branch and open PR. Runs outside the sandbox; returns PR URL."""
+    repo_dir = issue["dir"]
+
+    push = subprocess.run(
+        ["git", "push", "origin", "HEAD"],
+        cwd=repo_dir, capture_output=True, text=True,
+    )
+    if push.returncode != 0:
+        raise RuntimeError(f"git push failed: {push.stderr}")
+    log.debug("Branch pushed")
+
+    commit_title = subprocess.run(
+        ["git", "log", "-1", "--format=%s"],
+        cwd=repo_dir, capture_output=True, text=True,
+    ).stdout.strip()
+
+    pr = subprocess.run(
+        ["gh", "pr", "create",
+         "--title", "[agent] " + commit_title,      # agent-generated PR
+         "--body", f"Closes {issue['url']}"],
+        cwd=repo_dir, capture_output=True, text=True,
+    )
+    if pr.returncode != 0:
+        raise RuntimeError(f"gh pr create failed: {pr.stderr}")
+
+    return pr.stdout.strip()
 
 
 def _run_report(

@@ -55,35 +55,26 @@ agent:
 
     ## Submission
 
-    When your fix is complete and tests pass, open a pull request. Follow these steps IN ORDER
+    When your fix is complete and tests pass, commit your changes. Follow these steps IN ORDER
     with SEPARATE commands:
 
     Step 1: Stage and commit your changes
     Only commit files relevant to the fix (source files, not reproduction scripts or temp files).
+    Write a commit message that explains what was changed and why — this becomes the PR title.
     ```bash
     git add path/to/changed/file1 path/to/changed/file2
     git commit -m "fix: concise description of what was fixed and why"
     ```
 
-    Step 2: Push the branch
-    ```bash
-    git push origin HEAD
-    ```
-
-    Step 3: Open the pull request
-    Write a title and body that explain what changed and why, referencing the issue.
-    ```bash
-    gh pr create --title "fix: <title>" --body "<what changed, why, and how it was tested>"
-    ```
-
-    Step 4: Confirm submission (EXACT command required)
+    Step 2: Confirm submission (EXACT command required)
     ```bash
     echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
     ```
 
     <CRITICAL>
-    - You CANNOT continue working after the confirmation command in Step 4.
-    - Do not combine Step 4 with any other command using &&.
+    - Do NOT push or open a pull request — the pipeline handles this automatically after you submit.
+    - You CANNOT continue working after the confirmation command in Step 2.
+    - Do not combine Step 2 with any other command using &&.
     </CRITICAL>
     </instructions>
   step_limit: 250
