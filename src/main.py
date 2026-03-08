@@ -228,9 +228,9 @@ Examples:
     )
     sl_parser.add_argument(
         "--scanner-model",
-        default="gemini/gemini-flash",
+        default="gemini/gemini-3.1-flash-lite-preview",
         metavar="MODEL",
-        help="LiteLLM model for the scanner agent (default: gemini/gemini-flash)",
+        help="LiteLLM model for the scanner agent (default: gemini/gemini-3.1-flash-lite-preview)",
     )
     sl_parser.add_argument(
         "--fix-model",

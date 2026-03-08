@@ -58,9 +58,7 @@ def scan_codebase(
 
     env = LocalEnvironment(cwd=repo_path)
     model = LitellmModel(model_name=scanner_model)
-    agent = DefaultAgent(model=model, env=env, **{k: v for k, v in agent_cfg.items()
-                                                   if k not in ("system_template", "instance_template",
-                                                                "step_limit", "cost_limit")})
+    agent = DefaultAgent(model=model, env=env, **agent_cfg)
     # Re-apply limits
     agent.step_limit = step_limit
     agent.cost_limit = cost_limit
