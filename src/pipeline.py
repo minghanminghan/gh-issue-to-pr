@@ -85,6 +85,7 @@ def run_pipeline(
         if outcome == "pass":
             pr_url = _push_pr(issue)
             log.debug(f"PR created/updated: {pr_url}")
+            _watch_ci(issue, pr_url)
     except Exception as e:
         log.debug(f"Pipeline steps raised exception: {e!r}")
     finally:
@@ -166,15 +167,9 @@ def _push_pr(issue: Issue) -> str:
 
     # If it is a PR, comment on it.
     if "/pull/" in issue["url"]:
-        pr_number = issue["url"].split("/pull/")[1]
         # Post comment
         comment = f"I have addressed the issue. The changes have been pushed to the branch `agent/{_run_hash(issue['url'])}`."
-        pr = subprocess.run(
-            ["gh", "pr", "comment", pr_number, "--body", comment],
-            cwd=repo_dir, capture_output=True, text=True,
-        )
-        if pr.returncode != 0:
-            raise RuntimeError(f"gh pr comment failed: {pr.stderr}")
+        _post_pr_comment(issue["url"], repo_dir, comment)
         return issue["url"]
     else:
         # Create new PR
@@ -193,6 +188,45 @@ def _push_pr(issue: Issue) -> str:
             raise RuntimeError(f"gh pr create failed: {pr.stderr}")
 
         return pr.stdout.strip()
+
+
+def _post_pr_comment(pr_url: str, repo_dir: Path, comment: str) -> None:
+    pr = subprocess.run(
+        ["gh", "pr", "comment", pr_url, "--body", comment],
+        cwd=repo_dir, capture_output=True, text=True,
+    )
+    if pr.returncode != 0:
+        log.error(f"gh pr comment failed: {pr.stderr}")
+
+
+def _watch_ci(issue: Issue, pr_url: str) -> None:
+    repo_dir = issue["dir"]
+    log.info(f"Watching CI status for PR: {pr_url}")
+    
+    # Run checks and watch
+    result = subprocess.run(
+        ["gh", "pr", "checks", pr_url, "--watch"],
+        cwd=repo_dir, capture_output=True, text=True
+    )
+    
+    if result.returncode == 0:
+        log.info("CI passed!")
+    else:
+        log.error("CI failed!")
+        # Get failed checks
+        failed_checks_result = subprocess.run(
+            ["gh", "pr", "checks", pr_url, "--json", "name,state", "--jq", '.[] | select(.state=="fail") | .name'],
+            cwd=repo_dir, capture_output=True, text=True
+        )
+        
+        failed_checks = failed_checks_result.stdout.strip().split("\n")
+        failed_checks = [c for c in failed_checks if c]
+        
+        if failed_checks:
+            comment = f"The following CI checks failed: {', '.join(failed_checks)}. Please check the logs."
+            _post_pr_comment(pr_url, repo_dir, comment)
+        else:
+            _post_pr_comment(pr_url, repo_dir, "CI failed (some checks might be canceled or failed). Please check the logs.")
 
 
 def _run_report(
