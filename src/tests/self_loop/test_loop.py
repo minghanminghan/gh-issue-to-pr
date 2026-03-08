@@ -47,6 +47,24 @@ def _make_scan_result(candidates=None) -> ScanResult:
     )
 
 
+_COMMON_PATCHES = [
+    "self_loop.loop.commit_state_to_branch",
+    "self_loop.loop.auto_merge_pr",
+    "self_loop.loop.wait_for_ci",
+    "self_loop.loop.run_self_loop_pipeline",
+    "self_loop.loop.create_issue",
+    "self_loop.loop.filter_candidates",
+    "self_loop.loop.scan_codebase",
+    "self_loop.loop.list_open_issues",
+    "self_loop.loop.load_state",
+    "self_loop.loop.save_state",
+    "self_loop.loop.sync_run_worktree",
+    "self_loop.loop.setup_run_worktree",
+    "self_loop.loop.ensure_self_loop_branch",
+    "self_loop.loop._sanity_check",
+]
+
+
 @patch("self_loop.loop.commit_state_to_branch")
 @patch("self_loop.loop.auto_merge_pr")
 @patch("self_loop.loop.wait_for_ci")
@@ -57,11 +75,12 @@ def _make_scan_result(candidates=None) -> ScanResult:
 @patch("self_loop.loop.list_open_issues")
 @patch("self_loop.loop.load_state")
 @patch("self_loop.loop.save_state")
-@patch("self_loop.loop.sync_self_loop_branch")
+@patch("self_loop.loop.sync_run_worktree")
+@patch("self_loop.loop.setup_run_worktree")
 @patch("self_loop.loop.ensure_self_loop_branch")
 @patch("self_loop.loop._sanity_check")
 def test_dry_run_terminates(
-    mock_sanity, mock_ensure, mock_sync, mock_save, mock_load,
+    mock_sanity, mock_ensure, mock_setup_wt, mock_sync_wt, mock_save, mock_load,
     mock_list_issues, mock_scan, mock_filter, mock_create, mock_pipeline,
     mock_wait_ci, mock_merge, mock_commit,
 ):
@@ -96,11 +115,12 @@ def test_dry_run_terminates(
 @patch("self_loop.loop.list_open_issues")
 @patch("self_loop.loop.load_state")
 @patch("self_loop.loop.save_state")
-@patch("self_loop.loop.sync_self_loop_branch")
+@patch("self_loop.loop.sync_run_worktree")
+@patch("self_loop.loop.setup_run_worktree")
 @patch("self_loop.loop.ensure_self_loop_branch")
 @patch("self_loop.loop._sanity_check")
 def test_no_candidates_terminates_after_threshold(
-    mock_sanity, mock_ensure, mock_sync, mock_save, mock_load,
+    mock_sanity, mock_ensure, mock_setup_wt, mock_sync_wt, mock_save, mock_load,
     mock_list_issues, mock_scan, mock_filter, mock_create, mock_pipeline,
     mock_wait_ci, mock_merge, mock_commit,
 ):
@@ -134,11 +154,12 @@ def test_no_candidates_terminates_after_threshold(
 @patch("self_loop.loop.list_open_issues")
 @patch("self_loop.loop.load_state")
 @patch("self_loop.loop.save_state")
-@patch("self_loop.loop.sync_self_loop_branch")
+@patch("self_loop.loop.sync_run_worktree")
+@patch("self_loop.loop.setup_run_worktree")
 @patch("self_loop.loop.ensure_self_loop_branch")
 @patch("self_loop.loop._sanity_check")
 def test_budget_exhausted_terminates(
-    mock_sanity, mock_ensure, mock_sync, mock_save, mock_load,
+    mock_sanity, mock_ensure, mock_setup_wt, mock_sync_wt, mock_save, mock_load,
     mock_list_issues, mock_scan, mock_filter, mock_create, mock_pipeline,
     mock_wait_ci, mock_merge, mock_commit,
 ):
@@ -170,11 +191,12 @@ def test_budget_exhausted_terminates(
 @patch("self_loop.loop.list_open_issues")
 @patch("self_loop.loop.load_state")
 @patch("self_loop.loop.save_state")
-@patch("self_loop.loop.sync_self_loop_branch")
+@patch("self_loop.loop.sync_run_worktree")
+@patch("self_loop.loop.setup_run_worktree")
 @patch("self_loop.loop.ensure_self_loop_branch")
 @patch("self_loop.loop._sanity_check")
 def test_sanity_check_failure_terminates(
-    mock_sanity, mock_ensure, mock_sync, mock_save, mock_load,
+    mock_sanity, mock_ensure, mock_setup_wt, mock_sync_wt, mock_save, mock_load,
     mock_list_issues, mock_scan, mock_filter, mock_create, mock_pipeline,
     mock_wait_ci, mock_merge, mock_commit,
 ):
@@ -195,6 +217,8 @@ def test_sanity_check_failure_terminates(
     mock_scan.assert_not_called()
 
 
+@patch("self_loop.loop.os")
+@patch("self_loop.loop.copy_src_to_main")
 @patch("self_loop.loop.commit_state_to_branch")
 @patch("self_loop.loop.auto_merge_pr")
 @patch("self_loop.loop.wait_for_ci")
@@ -205,13 +229,14 @@ def test_sanity_check_failure_terminates(
 @patch("self_loop.loop.list_open_issues")
 @patch("self_loop.loop.load_state")
 @patch("self_loop.loop.save_state")
-@patch("self_loop.loop.sync_self_loop_branch")
+@patch("self_loop.loop.sync_run_worktree")
+@patch("self_loop.loop.setup_run_worktree")
 @patch("self_loop.loop.ensure_self_loop_branch")
 @patch("self_loop.loop._sanity_check")
 def test_successful_iteration_merges_pr(
-    mock_sanity, mock_ensure, mock_sync, mock_save, mock_load,
+    mock_sanity, mock_ensure, mock_setup_wt, mock_sync_wt, mock_save, mock_load,
     mock_list_issues, mock_scan, mock_filter, mock_create, mock_pipeline,
-    mock_wait_ci, mock_merge, mock_commit,
+    mock_wait_ci, mock_merge, mock_commit, mock_copy_src, mock_os,
 ):
     mock_sanity.return_value = True
     state = {
@@ -234,6 +259,8 @@ def test_successful_iteration_merges_pr(
     config = _make_config(max_iterations=1)
     reason = self_loop_run(config)
 
-    assert reason == "max_iterations_reached"
     mock_merge.assert_called_once()
-    mock_commit.assert_called()
+    mock_copy_src.assert_called_once()
+    mock_os.execv.assert_called_once()
+    # After mocked execv, loop exhausts → max_iterations_reached
+    assert reason == "max_iterations_reached"

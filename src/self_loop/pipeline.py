@@ -18,12 +18,17 @@ def run_self_loop_pipeline(
     issue_url: str,
     repo_local_path: str,
     config: dict,
+    run_dir: str | None = None,
 ) -> tuple[str, str, str | None]:
     """Run the fix pipeline and create a PR targeting the self-loop branch.
 
+    Changes are made inside run_dir (the self-loop worktree) when provided,
+    falling back to repo_local_path.
+
     Returns (outcome, reason, pr_url).
     """
-    log.debug(f"run_self_loop_pipeline: issue_url={issue_url!r}")
+    work_path = run_dir if run_dir else repo_local_path
+    log.debug(f"run_self_loop_pipeline: issue_url={issue_url!r} work_path={work_path!r}")
 
     guidelines = ""
     guidelines_path = config.get("guidelines_path")
@@ -33,7 +38,7 @@ def run_self_loop_pipeline(
         except Exception as e:
             log.warning(f"Could not read guidelines: {e}")
 
-    issue = run_setup(issue_url, local_path=repo_local_path)
+    issue = run_setup(issue_url, local_path=work_path)
 
     agent_config = AgentConfig(
         model_name=config.get("fix_model"),

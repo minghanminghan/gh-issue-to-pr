@@ -1,7 +1,7 @@
 # modified from .venv/Lib/minisweagent/config/benchmarks/swebench.yaml
 
 environment:
-  cwd: "." # TODO: dynamically set this
+  cwd: "."
   timeout: 60
   interpreter: ["bash", "-c"]
   env:

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 from self_loop.branch import (
     ensure_self_loop_branch,
-    sync_self_loop_branch,
     auto_merge_pr,
     commit_state_to_branch,
+    setup_run_worktree,
+    sync_run_worktree,
+    copy_src_to_main,
 )
 from self_loop.budget import BudgetTracker
 from self_loop.dedup import filter_candidates
@@ -39,9 +43,12 @@ def self_loop_run(config: SelfLoopConfig) -> str:
         per_run_usd=config["per_run_budget_usd"],
     )
 
-    # Ensure self-loop branch exists
+    run_dir = str(Path(repo_path) / "run" / "self_loop")
+
+    # Ensure self-loop branch exists and worktree is ready
     log.info(f"Ensuring branch {branch!r} exists")
     ensure_self_loop_branch(repo_path, branch)
+    setup_run_worktree(repo_path, branch, run_dir)
 
     state: LoopState = load_state(state_file)
     budget.load(state["total_cost_usd"])
@@ -59,11 +66,11 @@ def self_loop_run(config: SelfLoopConfig) -> str:
                 log.info(f"Terminating: {termination_reason}")
                 break
 
-            # Sync branch to clean state
-            sync_self_loop_branch(repo_path, branch)
+            # Sync worktree to clean state
+            sync_run_worktree(run_dir, branch)
 
-            # Sanity check: make sure codebase is importable
-            if not _sanity_check(repo_path):
+            # Sanity check: make sure worktree codebase is importable
+            if not _sanity_check(run_dir):
                 termination_reason = "codebase_broken"
                 log.error(f"Terminating: {termination_reason}")
                 break
@@ -72,10 +79,10 @@ def self_loop_run(config: SelfLoopConfig) -> str:
             open_issues = list_open_issues(repo_url)
             open_issue_titles = [i["title"] for i in open_issues]
 
-            # Scan for candidates
+            # Scan for candidates (always scan the worktree — it tracks self-loop)
             log.info("Scanning codebase for improvements...")
             scan_result = scan_codebase(
-                repo_path=repo_path,
+                repo_path=run_dir,
                 repo_github_url=repo_url,
                 scanner_model=config["scanner_model"],
                 open_issues=open_issues,
@@ -131,17 +138,18 @@ def self_loop_run(config: SelfLoopConfig) -> str:
             log.info(f"Created issue: {issue_url}")
             state["seen_fingerprints"].append(best["fingerprint"])
 
-            # Run fix pipeline
+            # Run fix pipeline (changes land in the worktree)
             log.info("Running fix pipeline...")
             outcome, reason, pr_url = run_self_loop_pipeline(
                 issue_url=issue_url,
                 repo_local_path=repo_path,
                 config=config,
+                run_dir=run_dir,
             )
             log.info(f"Pipeline outcome: {outcome!r}, reason: {reason!r}")
 
-            # After pipeline runs, sync back to self-loop branch
-            sync_self_loop_branch(repo_path, branch)
+            # Reset worktree to clean self-loop state after pipeline
+            sync_run_worktree(run_dir, branch)
 
             ci_status = "skipped"
             merged = False
@@ -154,8 +162,16 @@ def self_loop_run(config: SelfLoopConfig) -> str:
                 if ci_status == "pass":
                     merged = auto_merge_pr(pr_url, repo_path)
                     if merged:
-                        sync_self_loop_branch(repo_path, branch)
+                        sync_run_worktree(run_dir, branch)
+                        copy_src_to_main(run_dir, repo_path)
                         consecutive_failures = 0
+                        record_iteration(
+                            state, iteration, issue_url, pr_url,
+                            outcome, reason, 0.0, best["fingerprint"],
+                        )
+                        save_state(state, state_file)
+                        log.info("src/ updated from merged worktree; restarting process...")
+                        os.execv(sys.executable, [sys.executable] + sys.argv)
                     else:
                         log.warning("Auto-merge failed")
                         consecutive_failures += 1
@@ -165,12 +181,13 @@ def self_loop_run(config: SelfLoopConfig) -> str:
             else:
                 consecutive_failures += 1
 
-            record_iteration(
-                state, iteration, issue_url, pr_url,
-                outcome, reason, 0.0, best["fingerprint"],
-            )
-            save_state(state, state_file)
-            commit_state_to_branch(repo_path, state_file, branch)
+            if not merged:
+                record_iteration(
+                    state, iteration, issue_url, pr_url,
+                    outcome, reason, 0.0, best["fingerprint"],
+                )
+                save_state(state, state_file)
+                commit_state_to_branch(repo_path, state_file, branch)
 
             if consecutive_failures >= _TERMINATION_CONSECUTIVE_FAILURES:
                 termination_reason = "consecutive_failures"
