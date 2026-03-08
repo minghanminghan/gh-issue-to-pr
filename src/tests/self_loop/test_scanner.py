@@ -1,12 +1,9 @@
 """Tests for scanner module (mocked agent)."""
 
 import json
-import os
-import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
-from self_loop.scanner import _scan_todos, _get_git_log, _format_open_issues, _parse_scan_output
+from self_loop.scanner import _format_open_issues, _parse_scan_output
 
 
 def test_format_open_issues_empty():

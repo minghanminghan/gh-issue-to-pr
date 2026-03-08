@@ -1,8 +1,7 @@
 """Integration-level tests for the self-loop orchestrator (heavily mocked)."""
 
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch
 
-import pytest
 
 from self_loop.schema.loop_config import SelfLoopConfig
 from self_loop.schema.scan_result import IssueCandidate, ScanResult

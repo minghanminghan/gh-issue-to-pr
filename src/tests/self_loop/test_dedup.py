@@ -1,6 +1,5 @@
 """Tests for dedup module."""
 
-import pytest
 from self_loop.dedup import (
     compute_fingerprint,
     is_duplicate_fingerprint,

@@ -17,6 +17,8 @@ from minisweagent.config import get_config_from_spec
 
 from schema.config import AgentConfig
 from schema.issue import Issue
+from opentelemetry import trace as otel_trace
+
 from tools.log import get_logger
 from tools.setup import run_setup, _run_hash
 from tools.trace import close_trace
@@ -168,7 +170,6 @@ def _run_pipeline_steps(
         full_prompt = "\n".join(prompt)
         log.debug(f"Prompt assembled: {len(full_prompt)} chars total")
 
-        from opentelemetry import trace as otel_trace
         tracer = otel_trace.get_tracer("gh-issue-to-pr")
         with tracer.start_as_current_span("agent.run") as span:
             span.set_attribute("run_id", issue['dir'].name)

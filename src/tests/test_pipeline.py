@@ -80,12 +80,13 @@ def test_run_pipeline_steps(
     mock_tracer.start_as_current_span.return_value.__enter__ = MagicMock(return_value=mock_span)
     mock_tracer.start_as_current_span.return_value.__exit__ = MagicMock(return_value=False)
     mock_otel.get_tracer.return_value = mock_tracer
+    mock_agent.run.return_value = {"exit_status": "Submitted"}
 
     result = _run_pipeline_steps(
         issue, guidelines="be nice", agent_config={"model_name": None, "max_steps": None}
     )
 
-    assert result == "pass"
+    assert result == ("pass", "submitted")
     mock_agent.run.assert_called_once()
     prompt = mock_agent.run.call_args[0][0]
     assert "fix the bug" in prompt

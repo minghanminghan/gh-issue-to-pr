@@ -125,7 +125,7 @@ def _clone_repo(repo_url: str, hash: str) -> Path:
             subprocess.run(["git", "clean", "-fd"], cwd=clone_dir, check=True)
             return clone_dir.resolve()
         
-        log.debug(f"Clone dir invalid or mismatch; removing and re-cloning")
+        log.debug("Clone dir invalid or mismatch; removing and re-cloning")
         shutil.rmtree(clone_dir, onexc=_force_remove_readonly)
         
     clone_dir.mkdir(parents=True, exist_ok=True)

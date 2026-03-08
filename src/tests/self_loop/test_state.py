@@ -1,10 +1,6 @@
 """Tests for state persistence."""
 
-import json
-import os
-import tempfile
 
-import pytest
 
 from self_loop.state import load_state, save_state, record_iteration
 

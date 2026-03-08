@@ -1,7 +1,6 @@
 """Tests for self-loop pipeline wrapper."""
 
-from unittest.mock import patch, MagicMock
-import pytest
+from unittest.mock import patch
 
 
 def _make_issue(dir_path=None):

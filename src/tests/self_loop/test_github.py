@@ -2,7 +2,6 @@
 
 import json
 from unittest.mock import patch, MagicMock
-import subprocess
 
 from self_loop.github import list_open_issues, create_issue, wait_for_ci
 

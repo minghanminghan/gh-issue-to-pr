@@ -54,7 +54,6 @@ def _serve_subcommand(args: argparse.Namespace) -> None:
 
 def _self_loop_subcommand(args: argparse.Namespace) -> None:
     """Run the self-improvement loop."""
-    import os
     from self_loop.loop import self_loop_run
     from self_loop.schema.loop_config import SelfLoopConfig
 

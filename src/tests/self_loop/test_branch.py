@@ -1,6 +1,6 @@
 """Tests for branch management."""
 
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from self_loop.branch import auto_merge_pr, commit_state_to_branch
 

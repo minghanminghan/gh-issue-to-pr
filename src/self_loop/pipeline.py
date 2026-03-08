@@ -8,8 +8,8 @@ from pathlib import Path
 from schema.config import AgentConfig
 from schema.issue import Issue
 from tools.log import get_logger
-from tools.setup import run_setup, _run_hash
-from pipeline import _run_pipeline_steps, _run_report, _post_pr_comment
+from tools.setup import run_setup
+from pipeline import _run_pipeline_steps, _run_report
 
 log = get_logger(__name__)
 
