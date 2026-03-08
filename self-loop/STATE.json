@@ -1,0 +1,7 @@
+{
+  "total_iterations": 0,
+  "total_cost_usd": 0.0,
+  "seen_fingerprints": [],
+  "iterations": [],
+  "termination_reason": "dry_run_complete"
+}
