@@ -71,6 +71,23 @@ def root() -> str:
   <meta charset="utf-8">
   <title>gh-issue-to-pr</title>
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #333; }
+    form { display: flex; flex-direction: column; gap: 1rem; margin-top: 2rem; border: 1px solid #ddd; padding: 1.5rem; border-radius: 8px; background-color: #f9f9f9; }
+    label { display: flex; flex-direction: column; gap: 0.25rem; font-weight: 500; }
+    input, textarea { padding: 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; }
+    textarea { height: 100px; }
+    fieldset { border: 1px solid #ddd; padding: 1rem; border-radius: 4px; margin-top: 1rem; }
+    legend { font-weight: bold; padding: 0 0.5rem; }
+    button { padding: 0.75rem; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; font-weight: bold; margin-top: 1rem; }
+    button:hover { background-color: #0056b3; }
+    #jobs { margin-bottom: 2rem; border-bottom: 2px solid #eee; padding-bottom: 1rem; }
+    ul { padding: 0; list-style: none; }
+    li { padding: 0.5rem; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+    li span { font-weight: bold; color: #555; }
+  </style>
+
 </head>
 <body>
   <h1>gh-issue-to-pr</h1>
