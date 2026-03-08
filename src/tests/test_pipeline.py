@@ -51,6 +51,7 @@ def test_run_pipeline(mock_report, mock_steps, mock_setup, tmp_path):
         local_path=str(tmp_path),
         model_name=None,
         max_steps=None,
+        cache=False,
     )
 
     mock_setup.assert_called_once_with(
@@ -58,6 +59,82 @@ def test_run_pipeline(mock_report, mock_steps, mock_setup, tmp_path):
     )
     mock_steps.assert_called_once()
     mock_report.assert_called_once()
+
+
+@patch("pipeline.run_setup")
+@patch("pipeline._run_pipeline_steps", return_value=("pass", "submitted"))
+@patch("pipeline._push_pr", return_value="https://github.com/owner/repo/pull/99")
+@patch("pipeline._watch_ci")
+@patch("pipeline._run_report")
+def test_run_pipeline_deletes_run_dir_by_default(
+    mock_report, mock_watch, mock_push, mock_steps, mock_setup, tmp_path
+):
+    """Without --cache and no local_path, the run dir is deleted after push."""
+    issue = _make_issue(tmp_path)
+    run_dir = issue["dir"]
+    assert run_dir.exists()
+    mock_setup.return_value = issue
+
+    run_pipeline(
+        issue_url="https://github.com/owner/repo/issues/1",
+        guidelines_path=None,
+        local_path=None,
+        model_name=None,
+        max_steps=None,
+        cache=False,
+    )
+
+    assert not run_dir.exists()
+
+
+@patch("pipeline.run_setup")
+@patch("pipeline._run_pipeline_steps", return_value=("pass", "submitted"))
+@patch("pipeline._push_pr", return_value="https://github.com/owner/repo/pull/99")
+@patch("pipeline._watch_ci")
+@patch("pipeline._run_report")
+def test_run_pipeline_cache_keeps_run_dir(
+    mock_report, mock_watch, mock_push, mock_steps, mock_setup, tmp_path
+):
+    """With cache=True, the run dir is preserved after push."""
+    issue = _make_issue(tmp_path)
+    run_dir = issue["dir"]
+    mock_setup.return_value = issue
+
+    run_pipeline(
+        issue_url="https://github.com/owner/repo/issues/1",
+        guidelines_path=None,
+        local_path=None,
+        model_name=None,
+        max_steps=None,
+        cache=True,
+    )
+
+    assert run_dir.exists()
+
+
+@patch("pipeline.run_setup")
+@patch("pipeline._run_pipeline_steps", return_value=("pass", "submitted"))
+@patch("pipeline._push_pr", return_value="https://github.com/owner/repo/pull/99")
+@patch("pipeline._watch_ci")
+@patch("pipeline._run_report")
+def test_run_pipeline_local_path_never_deleted(
+    mock_report, mock_watch, mock_push, mock_steps, mock_setup, tmp_path
+):
+    """When local_path is provided, the directory is never deleted regardless of cache."""
+    issue = _make_issue(tmp_path)
+    run_dir = issue["dir"]
+    mock_setup.return_value = issue
+
+    run_pipeline(
+        issue_url="https://github.com/owner/repo/issues/1",
+        guidelines_path=None,
+        local_path=str(tmp_path),
+        model_name=None,
+        max_steps=None,
+        cache=False,
+    )
+
+    assert run_dir.exists()
 
 
 @patch("pipeline.platform.system", return_value="Darwin")

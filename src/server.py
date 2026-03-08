@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 import tempfile
 import threading
@@ -9,7 +12,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -17,6 +20,14 @@ from pipeline import run_pipeline
 from tools.log import get_logger
 log = get_logger(__name__)
 
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+# Trigger config — set by the `webhook` CLI subcommand before uvicorn starts.
+# WEBHOOK_LABEL: only fire on issues labeled with this value; empty string = any label.
+# WEBHOOK_ON_OPEN: also fire when an issue is opened (regardless of label).
+# WEBHOOK_ON_COMMENT: also fire when a comment starts with /fix.
+WEBHOOK_LABEL = os.getenv("WEBHOOK_LABEL", "agent")
+WEBHOOK_ON_OPEN = os.getenv("WEBHOOK_ON_OPEN", "false").lower() == "true"
+WEBHOOK_ON_COMMENT = os.getenv("WEBHOOK_ON_COMMENT", "false").lower() == "true"
 
 app = FastAPI(title="gh-issue-to-pr", version="0.1.0")
 
@@ -42,6 +53,7 @@ class IssueRequest(BaseModel):
     max_steps: int | None = Field(default=None, gt=0)
     model_api_key: str | None = None
     model_endpoint: str | None = None
+    cache: bool = False
 
 
 class AcceptedResponse(BaseModel):
@@ -216,6 +228,54 @@ def get_status(issue_url: str) -> StatusResponse:
     )
 
 
+@app.post("/webhook/github", status_code=200)
+async def github_webhook(
+    request: Request,
+    x_hub_signature_256: str | None = Header(default=None),
+    x_github_event: str | None = Header(default=None),
+) -> dict:
+    """
+    Receive GitHub webhook events and enqueue pipeline jobs automatically.
+
+    Trigger conditions (configured via env vars set by the webhook CLI subcommand):
+    - issues labeled with WEBHOOK_LABEL (default: 'agent'; empty = any label)
+    - issues opened, if WEBHOOK_ON_OPEN is true
+    - issue comments starting with /fix, if WEBHOOK_ON_COMMENT is true
+    """
+    body = await request.body()
+
+    if WEBHOOK_SECRET:
+        if not x_hub_signature_256:
+            raise HTTPException(status_code=401, detail="Missing X-Hub-Signature-256 header")
+        expected = "sha256=" + hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, x_hub_signature_256):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    payload = json.loads(body)
+    action = payload.get("action")
+    log.debug(f"POST /webhook/github: event={x_github_event!r}, action={action!r}")
+
+    issue_url: str | None = None
+
+    if x_github_event == "issues":
+        if action == "labeled":
+            label_name = payload.get("label", {}).get("name", "")
+            if not WEBHOOK_LABEL or label_name == WEBHOOK_LABEL:
+                issue_url = payload["issue"]["html_url"]
+        elif action == "opened" and WEBHOOK_ON_OPEN:
+            issue_url = payload["issue"]["html_url"]
+    elif x_github_event == "issue_comment" and action == "created" and WEBHOOK_ON_COMMENT:
+        comment_body = payload["comment"]["body"].strip()
+        if comment_body.startswith("/fix"):
+            issue_url = payload["issue"]["html_url"]
+
+    if issue_url:
+        log.debug(f"Webhook triggering pipeline for issue_url={issue_url!r}")
+        submit_issue(IssueRequest(issue_url=issue_url))
+
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # Background job runner
 # ---------------------------------------------------------------------------
@@ -262,6 +322,7 @@ def _run_pipeline_job(req: IssueRequest) -> None:
             budget=req.budget,
             model_api_key=req.model_api_key,
             model_endpoint=req.model_endpoint,
+            cache=req.cache,
         )
         log.debug(f"run_pipeline completed: outcome={outcome!r}, finish_reason={finish_reason!r}")
     except SystemExit:

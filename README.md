@@ -1,6 +1,6 @@
 # gh-issue-to-pr
 
-An AI agent pipeline that turns GitHub issues into pull requests. Given an issue URL, it autonomously reads the codebase, plans changes, writes code, validates it, runs tests, and opens a PR -- all using an LLM via LiteLLM.
+An AI agent pipeline that turns GitHub issues into pull requests. Given an issue URL, it autonomously reads the codebase, plans changes, writes code, validates it, runs tests, and opens a PR -- all using an LLM via LiteLLM. It is recommended to run this project on Linux (although Windows and Mac are supported) because of agent sandboxing concerns.
 
 ## How it works
 
@@ -10,7 +10,9 @@ This repo wraps [mini-swe-agent](https://mini-swe-agent.com/) by adding a webser
 
 - **Python 3.12+**
 - **[uv](https://docs.astral.sh/uv/)**
+- **[bwrap](https://github.com/containers/bubblewrap)** (Linux-only)
 - **[gh CLI](https://cli.github.com/)**
+- **[ngrok](https://ngrok.com/download)** (only required for `serve --repo-url` webhook mode)
 - **[mini-swe-agent](https://mini-swe-agent.com/)**
 
 ---
@@ -35,7 +37,7 @@ uv install --group phoenix
 phoenix serve # defaults to port 6006
 ```
 
-### Only run pipeline
+### Run pipeline through CLI
 
 ```bash
 python src/main.py run <issue_url> <repo_url> [options]
@@ -50,6 +52,7 @@ python src/main.py run <issue_url> <repo_url> [options]
 | `--guidelines FILE` | No | Path to contribution guidelines (e.g. `CONTRIBUTING.md`) |
 | `--config FILE` | No | Path to mini-swe-agent configuration YAML file |
 | `--budget USD` | No | Cost cap in USD (default: `2.00`) |
+| `--cache` | No | Keep the cloned `run/<hash>` directory after the PR is pushed (default: delete it) |
 
 ```bash
 # Clone the repo automatically and run the pipeline
@@ -78,21 +81,46 @@ Pipeline completed. Run artifacts: <root>/run/<hash>/
 ### Run webserver
 
 ```bash
-python src/main.py serve [--host HOST] [--port PORT]
+python src/main.py serve [options]
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--host HOST` | `127.0.0.1` | Bind address |
 | `--port PORT` | `8080` | Bind port |
+| `--repo-url URL` | — | GitHub repo to subscribe to via webhook. When set, starts an ngrok tunnel and registers the webhook automatically. |
+| `--label LABEL` | `agent` | Only trigger on issues labeled with this value. Pass `''` to trigger on any label. |
+| `--on-open` | off | Also trigger when an issue is opened, regardless of label |
+| `--on-comment` | off | Also trigger when an issue comment starts with `/fix` |
 
 ```bash
-# Start on port 8080
+# Start the HTTP API server only
 python src/main.py serve
 
-# Specify host and port
-python src/main.py serve --host <host> --port <port>
+# Start server and auto-subscribe to a GitHub repo via webhook
+export WEBHOOK_SECRET=your-secret-here
+python src/main.py serve --repo-url https://github.com/owner/repo
+
+# Trigger on every new issue, not just labeled ones
+python src/main.py serve --repo-url https://github.com/owner/repo --on-open --label ''
 ```
+
+When `--repo-url` is provided:
+1. An ngrok HTTPS tunnel is started on the bind port ([ngrok](https://ngrok.com/) must be installed and authenticated)
+2. The tunnel URL is registered as a GitHub webhook on the repo (`WEBHOOK_SECRET` env var must be set)
+3. The HTTP server starts
+
+On exit (Ctrl+C), the webhook is automatically deleted from GitHub and ngrok is stopped.
+
+**Trigger conditions (default):**
+
+| GitHub event | Condition | Enabled by default |
+|---|---|---|
+| Issue labeled | label name == `agent` | yes |
+| Issue opened | any | no — enable with `--on-open` |
+| Issue comment created | body starts with `/fix` | no — enable with `--on-comment` |
+
+Duplicate submissions (e.g. an issue opened and then labeled) are deduplicated — only one pipeline run per issue will be active at a time.
 
 ### HTTP API
 
@@ -160,9 +188,65 @@ curl "http://127.0.0.1:8080/status?issue=https://github.com/owner/repo/issues/42
 
 ---
 
+### Self-loop (autonomous self-improvement)
+
+The `self-loop` subcommand runs an autonomous improvement cycle on the repo itself. Each iteration:
+
+1. Scans the codebase with a lightweight scanner agent to find improvement candidates (bugs, missing tests, code quality issues, etc.)
+2. Deduplicates against already-seen fingerprints and open GitHub issues
+3. Creates a GitHub issue for the best candidate (labeled `self-loop`)
+4. Runs the fix pipeline, targeting a dedicated `self-loop` branch
+5. Waits for CI; auto-merges on green, then restarts the loop with the updated code
+
+State is persisted in `self-loop/STATE.json` so the loop can be resumed across restarts.
+
+```bash
+python src/main.py self-loop [options]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--repo-url URL` | auto-detected from `git remote origin` | GitHub repo URL |
+| `--repo-path PATH` | `.` | Local path to the repo |
+| `--max-iterations N` | `10` | Maximum loop iterations |
+| `--max-budget USD` | `30.0` | Total budget cap in USD across all runs |
+| `--per-run-budget USD` | `3.0` | Cost cap per individual pipeline run |
+| `--per-run-steps N` | `100` | Max agent steps per pipeline run |
+| `--scanner-model MODEL` | `gemini/gemini-3.1-flash-lite-preview` | LiteLLM model for the scanner agent |
+| `--fix-model MODEL` | `$MODEL_NAME` | LiteLLM model for the fix agent |
+| `--min-priority LEVEL` | `medium` | Minimum candidate priority to act on (`critical`, `high`, `medium`, `low`) |
+| `--guidelines FILE` | — | Path to contribution guidelines file |
+| `--dry-run` | off | Scan and print candidates only; do not create issues or run the pipeline |
+
+```bash
+# Preview what the scanner would find, without creating issues or running the pipeline
+python src/main.py self-loop --dry-run
+
+# Run against a specific repo with a $20 total budget
+python src/main.py self-loop \
+    --repo-url https://github.com/owner/repo \
+    --max-budget 20.0 \
+    --min-priority high
+```
+
+The loop terminates when any of the following conditions are met:
+
+| Reason | Description |
+|--------|-------------|
+| `max_iterations_reached` | Ran all `--max-iterations` iterations |
+| `budget_exhausted` | Total cost would exceed `--max-budget` |
+| `no_candidates` | No viable candidates found in 3 consecutive iterations |
+| `consecutive_failures` | 3 consecutive pipeline/CI/merge failures |
+| `codebase_broken` | Import sanity check failed (loop would worsen a broken state) |
+| `dry_run_complete` | `--dry-run` mode: candidates printed, nothing executed |
+
+---
+
 ## Run artifacts
 
 Every run creates a directory at `<root>/run/<hash>/` (`run/` is gitignored). The hash is the first 8 hex characters of the SHA-256 of the issue URL, so re-running the same issue always maps to the same directory. If a hash collision occurs, the existing run directory is overwritten.
+
+By default the cloned repo inside `run/<hash>/` is deleted after the PR is successfully pushed. Pass `--cache` (CLI) or `"cache": true` (HTTP API) to keep it. Directories are never deleted when `--local-path` is used, since the checkout belongs to the caller.
 
 | File | Written by | Contents |
 |------|-----------|----------|

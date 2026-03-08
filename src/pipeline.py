@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import platform
 import subprocess
@@ -62,6 +63,7 @@ def run_pipeline(
     budget: float | None = None,
     model_api_key: str | None = None,
     model_endpoint: str | None = None,
+    cache: bool = False,
 ) -> tuple[str, str]:
     """
     Main pipeline entry point.
@@ -106,6 +108,10 @@ def run_pipeline(
             pr_url = _push_pr(issue)
             log.debug(f"PR created/updated: {pr_url}")
             _watch_ci(issue, pr_url)
+            if not cache and local_path is None:
+                run_dir = issue["dir"]
+                shutil.rmtree(run_dir, ignore_errors=True)
+                log.info(f"Deleted run directory: {run_dir}")
     except Exception as e:
         log.debug(f"Pipeline steps raised exception: {e!r}")
     finally:
@@ -185,8 +191,8 @@ def _run_pipeline_steps(
 
     except Exception as e:
         log.error(f"Agent execution failed: {e}", exc_info=True)
-        log.debug(f"Agent failure details: type={type(e).__name__}, args={e.args!r}")
-        # log_event(run_dir, "agent_failure", {"error": str(e)})
+        log.debug(f"Agent fail details: type={type(e).__name__}, args={e.args!r}")
+        # log_event(run_dir, "agent_fail", {"error": str(e)})
         return "fail", "exception"
 
 
@@ -272,5 +278,5 @@ def _run_report(
     run_dir = issue["dir"]
     close_trace(run_dir, outcome, issue["url"], agent_config)
 
-    if outcome == "failure":
+    if outcome == "fail":
         sys.exit(1)

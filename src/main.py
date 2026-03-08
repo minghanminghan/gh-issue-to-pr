@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -33,6 +34,7 @@ def _run_subcommand(args: argparse.Namespace) -> None:
             local_path=args.local_path,
             model_name=args.model_name,
             max_steps=args.max_steps,
+            cache=args.cache,
         )
         log.debug("\nPipeline completed.")
     except SystemExit as e:
@@ -46,9 +48,112 @@ def _run_subcommand(args: argparse.Namespace) -> None:
 
 
 def _serve_subcommand(args: argparse.Namespace) -> None:
-    """Start the FastAPI/uvicorn web server."""
+    """Start the FastAPI/uvicorn web server, optionally with a GitHub webhook."""
     import uvicorn
 
+    if not args.repo_url:
+        uvicorn.run("server:app", host=args.host, port=args.port, reload=False)
+        return
+
+    # Webhook mode: start ngrok, register webhook, then serve
+    import atexit
+    import json
+    import signal
+    import subprocess
+    import time
+    import urllib.error
+    import urllib.request
+
+    if not args.repo_url.startswith("https://github.com/"):
+        log.error("Error: --repo-url must be a full GitHub URL (https://github.com/...)")
+        sys.exit(2)
+
+    webhook_secret = os.environ.get("WEBHOOK_SECRET", "")
+    if not webhook_secret:
+        log.error("Error: WEBHOOK_SECRET environment variable must be set")
+        sys.exit(2)
+
+    owner_repo = args.repo_url.removeprefix("https://github.com/").rstrip("/")
+
+    # Start ngrok
+    log.info(f"Starting ngrok tunnel on port {args.port}...")
+    ngrok_proc = subprocess.Popen(
+        ["ngrok", "http", str(args.port), "--log=stdout"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Poll ngrok local API until HTTPS tunnel is ready
+    public_url: str | None = None
+    for _ in range(20):
+        time.sleep(0.5)
+        try:
+            with urllib.request.urlopen("http://localhost:4040/api/tunnels") as resp:
+                data = json.loads(resp.read())
+            for tunnel in data.get("tunnels", []):
+                if tunnel.get("proto") == "https":
+                    public_url = tunnel["public_url"]
+                    break
+        except urllib.error.URLError:
+            pass
+        if public_url:
+            break
+
+    if not public_url:
+        ngrok_proc.terminate()
+        log.error("Error: timed out waiting for ngrok HTTPS tunnel")
+        sys.exit(1)
+
+    webhook_url = f"{public_url}/webhook/github"
+    log.info(f"ngrok tunnel active: {webhook_url}")
+
+    # Register webhook via gh CLI
+    log.info(f"Registering webhook on {args.repo_url}...")
+    result = subprocess.run(
+        [
+            "gh", "api", f"repos/{owner_repo}/hooks",
+            "--method", "POST",
+            "-f", f"config[url]={webhook_url}",
+            "-f", "config[content_type]=json",
+            "-f", f"config[secret]={webhook_secret}",
+            "-f", "events[]=issues",
+            "-f", "events[]=issue_comment",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        ngrok_proc.terminate()
+        log.error(f"Error: gh webhook registration failed:\n{result.stderr.strip()}")
+        sys.exit(1)
+
+    hook_id: str | None = None
+    try:
+        hook_id = str(json.loads(result.stdout)["id"])
+        log.info(f"Webhook registered (id={hook_id})")
+    except (KeyError, json.JSONDecodeError):
+        log.warning("Could not parse hook ID from gh response; webhook will not be auto-deleted on exit")
+
+    # Cleanup on exit
+    def _cleanup() -> None:
+        log.info("Cleaning up webhook and ngrok...")
+        if hook_id:
+            subprocess.run(
+                ["gh", "api", f"repos/{owner_repo}/hooks/{hook_id}", "--method", "DELETE"],
+                capture_output=True,
+            )
+            log.info(f"Webhook {hook_id} deleted")
+        ngrok_proc.terminate()
+
+    atexit.register(_cleanup)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+    # Configure webhook trigger behaviour via env vars before server imports them
+    os.environ["WEBHOOK_LABEL"] = args.label
+    os.environ["WEBHOOK_ON_OPEN"] = "true" if args.on_open else "false"
+    os.environ["WEBHOOK_ON_COMMENT"] = "true" if args.on_comment else "false"
+
+    log.info(f"Starting server on {args.host}:{args.port}")
     uvicorn.run("server:app", host=args.host, port=args.port, reload=False)
 
 
@@ -129,6 +234,7 @@ Examples:
   python main.py run https://github.com/owner/repo/issues/42 \\
       --local-path /path/to/local/repo --guidelines CONTRIBUTING.md --budget 5.00
   python main.py serve --host 0.0.0.0 --port 8080
+  python main.py serve --repo-url https://github.com/owner/repo
   python main.py self-loop --dry-run
   python main.py self-loop --repo-url https://github.com/owner/gh-issue-to-pr --dry-run
 """,
@@ -170,6 +276,11 @@ Examples:
         metavar="USD",
         help="Cost budget in USD (default: 2.00)",
     )
+    run_parser.add_argument(
+        "--cache",
+        action="store_true",
+        help="Keep the cloned run/<hash> directory after the PR is pushed (default: delete it)",
+    )
     run_parser.set_defaults(func=_run_subcommand)
 
     # ---- 'serve' subcommand ----
@@ -179,6 +290,29 @@ Examples:
     )
     serve_parser.add_argument(
         "--port", type=int, default=8080, help="Bind port (default: 8080)"
+    )
+    serve_parser.add_argument(
+        "--repo-url",
+        default=None,
+        metavar="URL",
+        help="GitHub repo URL to subscribe to via webhook (https://github.com/owner/repo). "
+             "When set, starts an ngrok tunnel and registers a GitHub webhook automatically.",
+    )
+    serve_parser.add_argument(
+        "--label",
+        default="agent",
+        metavar="LABEL",
+        help="Only trigger on issues labeled with this value (default: 'agent'). Pass '' to trigger on any label.",
+    )
+    serve_parser.add_argument(
+        "--on-open",
+        action="store_true",
+        help="Also trigger when an issue is opened, regardless of label",
+    )
+    serve_parser.add_argument(
+        "--on-comment",
+        action="store_true",
+        help="Also trigger when an issue comment starts with /fix",
     )
     serve_parser.set_defaults(func=_serve_subcommand)
 
