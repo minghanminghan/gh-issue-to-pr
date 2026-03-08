@@ -52,6 +52,27 @@ def _serve_subcommand(args: argparse.Namespace) -> None:
     uvicorn.run("server:app", host=args.host, port=args.port, reload=False)
 
 
+def _detect_github_url(repo_path: str) -> str | None:
+    """Return the GitHub HTTPS URL inferred from git remote origin, or None."""
+    import subprocess
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    remote = result.stdout.strip()
+    # Normalise SSH → HTTPS: git@github.com:owner/repo.git → https://github.com/owner/repo
+    if remote.startswith("git@github.com:"):
+        remote = "https://github.com/" + remote[len("git@github.com:"):]
+    # Strip .git suffix
+    if remote.endswith(".git"):
+        remote = remote[:-4]
+    if remote.startswith("https://github.com/"):
+        return remote
+    return None
+
+
 def _self_loop_subcommand(args: argparse.Namespace) -> None:
     """Run the self-improvement loop."""
     from self_loop.loop import self_loop_run
@@ -63,13 +84,17 @@ def _self_loop_subcommand(args: argparse.Namespace) -> None:
         log.error(f"Error: --repo-path does not exist: {repo_path}")
         sys.exit(2)
 
-    if not args.repo_url.startswith("https://github.com/"):
+    repo_url = args.repo_url or _detect_github_url(repo_path)
+    if not repo_url:
+        log.error("Error: could not detect GitHub URL from git remote; use --repo-url")
+        sys.exit(2)
+    if not repo_url.startswith("https://github.com/"):
         log.error("Error: --repo-url must be a full GitHub URL (https://github.com/...)")
         sys.exit(2)
 
     config: SelfLoopConfig = {
         "repo_local_path": repo_path,
-        "repo_github_url": args.repo_url,
+        "repo_github_url": repo_url,
         "self_loop_branch": "self-loop",
         "max_iterations": args.max_iterations,
         "max_total_budget_usd": args.max_budget,
@@ -104,6 +129,7 @@ Examples:
   python main.py run https://github.com/owner/repo/issues/42 \\
       --local-path /path/to/local/repo --guidelines CONTRIBUTING.md --budget 5.00
   python main.py serve --host 0.0.0.0 --port 8080
+  python main.py self-loop --dry-run
   python main.py self-loop --repo-url https://github.com/owner/gh-issue-to-pr --dry-run
 """,
     )
@@ -162,9 +188,9 @@ Examples:
     )
     sl_parser.add_argument(
         "--repo-url",
-        required=True,
+        default=None,
         metavar="URL",
-        help="GitHub repo URL (e.g. https://github.com/owner/gh-issue-to-pr)",
+        help="GitHub repo URL (default: auto-detected from git remote origin)",
     )
     sl_parser.add_argument(
         "--repo-path",
