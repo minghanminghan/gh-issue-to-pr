@@ -52,6 +52,49 @@ def _serve_subcommand(args: argparse.Namespace) -> None:
     uvicorn.run("server:app", host=args.host, port=args.port, reload=False)
 
 
+def _self_loop_subcommand(args: argparse.Namespace) -> None:
+    """Run the self-improvement loop."""
+    import os
+    from self_loop.loop import self_loop_run
+    from self_loop.schema.loop_config import SelfLoopConfig
+
+    repo_path = str(Path(args.repo_path).resolve()) if args.repo_path else str(Path(".").resolve())
+
+    if not Path(repo_path).is_dir():
+        log.error(f"Error: --repo-path does not exist: {repo_path}")
+        sys.exit(2)
+
+    if not args.repo_url.startswith("https://github.com/"):
+        log.error("Error: --repo-url must be a full GitHub URL (https://github.com/...)")
+        sys.exit(2)
+
+    config: SelfLoopConfig = {
+        "repo_local_path": repo_path,
+        "repo_github_url": args.repo_url,
+        "self_loop_branch": "self-loop",
+        "max_iterations": args.max_iterations,
+        "max_total_budget_usd": args.max_budget,
+        "per_run_budget_usd": args.per_run_budget,
+        "per_run_max_steps": args.per_run_steps,
+        "scanner_model": args.scanner_model,
+        "fix_model": args.fix_model,
+        "state_file": "self-loop/STATE.json",
+        "dry_run": args.dry_run,
+        "min_issue_priority": args.min_priority,
+        "guidelines_path": args.guidelines,
+    }
+
+    try:
+        reason = self_loop_run(config)
+        log.info(f"Self-loop completed: {reason}")
+    except KeyboardInterrupt:
+        log.error("\nInterrupted by user.")
+        sys.exit(130)
+    except Exception as e:
+        log.error(f"\nSelf-loop error: {e}")
+        sys.exit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Turn a GitHub issue into a pull request using AI agents.",
@@ -62,6 +105,7 @@ Examples:
   python main.py run https://github.com/owner/repo/issues/42 \\
       --local-path /path/to/local/repo --guidelines CONTRIBUTING.md --budget 5.00
   python main.py serve --host 0.0.0.0 --port 8080
+  python main.py self-loop --repo-url https://github.com/owner/gh-issue-to-pr --dry-run
 """,
     )
 
@@ -112,6 +156,80 @@ Examples:
         "--port", type=int, default=8080, help="Bind port (default: 8080)"
     )
     serve_parser.set_defaults(func=_serve_subcommand)
+
+    # ---- 'self-loop' subcommand ----
+    sl_parser = subparsers.add_parser(
+        "self-loop", help="Continuously improve the codebase via self-loop agent"
+    )
+    sl_parser.add_argument(
+        "--repo-url",
+        required=True,
+        metavar="URL",
+        help="GitHub repo URL (e.g. https://github.com/owner/gh-issue-to-pr)",
+    )
+    sl_parser.add_argument(
+        "--repo-path",
+        metavar="PATH",
+        default=".",
+        help="Local path to the repo (default: current directory)",
+    )
+    sl_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Maximum number of loop iterations (default: 10)",
+    )
+    sl_parser.add_argument(
+        "--max-budget",
+        type=float,
+        default=30.0,
+        metavar="USD",
+        help="Total budget in USD across all runs (default: 30.0)",
+    )
+    sl_parser.add_argument(
+        "--per-run-budget",
+        type=float,
+        default=3.0,
+        metavar="USD",
+        help="Budget per pipeline run in USD (default: 3.0)",
+    )
+    sl_parser.add_argument(
+        "--per-run-steps",
+        type=int,
+        default=100,
+        metavar="STEPS",
+        help="Max steps per pipeline run (default: 100)",
+    )
+    sl_parser.add_argument(
+        "--scanner-model",
+        default="gemini/gemini-flash",
+        metavar="MODEL",
+        help="LiteLLM model for the scanner agent (default: gemini/gemini-flash)",
+    )
+    sl_parser.add_argument(
+        "--fix-model",
+        default=None,
+        metavar="MODEL",
+        help="LiteLLM model for the fix agent (default: MODEL_NAME env var)",
+    )
+    sl_parser.add_argument(
+        "--min-priority",
+        choices=["critical", "high", "medium", "low"],
+        default="medium",
+        help="Minimum issue priority to act on (default: medium)",
+    )
+    sl_parser.add_argument(
+        "--guidelines",
+        metavar="FILE",
+        help="Path to contribution guidelines file",
+    )
+    sl_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Scan and print candidates only; do not create issues or run pipeline",
+    )
+    sl_parser.set_defaults(func=_self_loop_subcommand)
 
     args = parser.parse_args()
 

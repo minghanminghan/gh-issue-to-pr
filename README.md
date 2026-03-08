@@ -38,7 +38,7 @@ phoenix serve # defaults to port 6006
 ### Only run pipeline
 
 ```bash
-python main.py run <issue_url> <repo_url> [options]
+python src/main.py run <issue_url> <repo_url> [options]
 ```
 
 | Argument | Required | Description |
@@ -53,19 +53,19 @@ python main.py run <issue_url> <repo_url> [options]
 
 ```bash
 # Clone the repo automatically and run the pipeline
-python main.py run https://github.com/<user>/<repo>/issues/<issue>
+python src/main.py run https://github.com/<user>/<repo>/issues/<issue>
 
 # Use a local repo checkout (must have a clean working tree)
-python main.py run https://github.com/<user>/<repo>/issues/<issue> \
+python src/main.py run https://github.com/<user>/<repo>/issues/<issue> \
     --local-path /path/to/local/repo
 
 # Pass contribution guidelines and a custom budget
-python main.py run https://github.com/<user>/<repo>/issues/<issue> \
+python src/main.py run https://github.com/<user>/<repo>/issues/<issue> \
     --guidelines CONTRIBUTING.md \
     --budget 5.00
 
 # Use a custom agent configuration
-python main.py run https://github.com/<user>/<repo>/issues/<issue> \
+python src/main.py run https://github.com/<user>/<repo>/issues/<issue> \
     --config my_agent_config.yaml
 ```
 
@@ -78,7 +78,7 @@ Pipeline completed. Run artifacts: <root>/run/<hash>/
 ### Run webserver
 
 ```bash
-python main.py serve [--host HOST] [--port PORT]
+python src/main.py serve [--host HOST] [--port PORT]
 ```
 
 | Option | Default | Description |
@@ -88,10 +88,10 @@ python main.py serve [--host HOST] [--port PORT]
 
 ```bash
 # Start on port 8080
-python main.py serve
+python src/main.py serve
 
 # Specify host and port
-python main.py serve --host <host> --port <port>
+python src/main.py serve --host <host> --port <port>
 ```
 
 ### HTTP API

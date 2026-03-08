@@ -57,7 +57,18 @@ def run_pipeline(
     local_path: str | None,
     model_name: str | None,
     max_steps: int | None,
-) -> None:
+    budget: float | None = None,
+    model_api_key: str | None = None,
+    model_endpoint: str | None = None,
+) -> tuple[str, str]:
+    """
+    Main pipeline entry point.
+
+    Steps:
+      0 (setup) -> 1 (mini-swe-agent) -> 2 (report)
+
+    Returns run_dir.
+    """
     log.debug(
         f"run_pipeline called: issue_url={issue_url!r}, guidelines_path={guidelines_path!r}, local_path={local_path!r}, model_name={model_name!r}, max_steps={max_steps!r}"
     )
@@ -76,12 +87,19 @@ def run_pipeline(
     issue = run_setup(issue_url, local_path=local_path)
     log.debug("Setup complete")
 
-    agent_config = AgentConfig(model_name=model_name, max_steps=max_steps)
+    agent_config = AgentConfig(
+        model_name=model_name,
+        max_steps=max_steps,
+        budget=budget,
+        model_api_key=model_api_key,
+        model_endpoint=model_endpoint,
+    )
     log.debug(f"AgentConfig created: {dict(agent_config)}")
     outcome = "fail"
+    reason = "unknown"
     try:
-        outcome = _run_pipeline_steps(issue, guidelines, agent_config)
-        log.debug(f"Pipeline steps finished with outcome={outcome!r}")
+        outcome, reason = _run_pipeline_steps(issue, guidelines, agent_config)
+        log.debug(f"Pipeline steps finished with outcome={outcome!r}, reason={reason!r}")
         if outcome == "pass":
             pr_url = _push_pr(issue)
             log.debug(f"PR created/updated: {pr_url}")
@@ -90,11 +108,15 @@ def run_pipeline(
         log.debug(f"Pipeline steps raised exception: {e!r}")
     finally:
         _run_report(issue, outcome, agent_config)
+    return outcome, reason
 
 
 def _run_pipeline_steps(
     issue: Issue, guidelines: str, agent_config: AgentConfig | dict[str, Any]
-) -> str:
+) -> tuple[str, str]:
+    """Inner pipeline loop using mini-swe-agent. Returns (outcome, reason)."""
+
+    # Step 1: Execute agent
     log.debug("_run_pipeline_steps")
 
     try:
@@ -118,12 +140,18 @@ def _run_pipeline_steps(
         if agent_config.get("max_steps") is not None:
             config.setdefault("agent", {})["step_limit"] = agent_config["max_steps"]
             log.debug(f"Override step_limit={agent_config['max_steps']}")
+        if agent_config.get("budget") is not None:
+            config.setdefault("agent", {})["cost_limit"] = agent_config["budget"]
+            log.debug(f"Override cost_limit={agent_config['budget']}")
 
         effective_model = config.get("model", {}).get("model_name", MODEL_NAME)
         log.debug(f"Effective model name: {effective_model!r}")
-        model = LitellmModel(
-            model_name=effective_model,
-        )
+        model_kwargs: dict[str, Any] = {}
+        if agent_config.get("model_api_key"):
+            model_kwargs["api_key"] = agent_config["model_api_key"]
+        if agent_config.get("model_endpoint"):
+            model_kwargs["api_base"] = agent_config["model_endpoint"]
+        model = LitellmModel(model_name=effective_model, model_kwargs=model_kwargs)
         log.debug("LitellmModel initialized")
 
         agent_kwargs = config.get("agent", {})
@@ -146,11 +174,19 @@ def _run_pipeline_steps(
             span.set_attribute("run_id", issue['dir'].name)
             result = agent.run(full_prompt)
         log.debug(f"Agent run result: {result!r}")
-        return "pass"
+        exit_status = result.get("exit_status", "unknown")
+        if exit_status == "Submitted":
+            return "pass", "submitted"
+        elif exit_status == "LimitsExceeded":
+            return "fail", "limits_exceeded"
+        else:
+            return "fail", exit_status.lower()
 
     except Exception as e:
         log.error(f"Agent execution failed: {e}", exc_info=True)
-        return "fail"
+        log.debug(f"Agent failure details: type={type(e).__name__}, args={e.args!r}")
+        # log_event(run_dir, "agent_failure", {"error": str(e)})
+        return "fail", "exception"
 
 
 def _push_pr(issue: Issue) -> str:
