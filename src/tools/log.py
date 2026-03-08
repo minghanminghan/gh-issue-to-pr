@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +34,10 @@ logging.basicConfig(
 _external_level = max(_log_level, logging.INFO)
 for _name in ("litellm", "LiteLLM", "minisweagent", "agent", "httpx", "httpcore"):
     logging.getLogger(_name).setLevel(_external_level)
+
+# Suppress Pydantic serialization warnings from openinference-instrumentation-litellm
+# (version mismatch between LiteLLM response shape and instrumentor's model — harmless)
+warnings.filterwarnings("ignore", message="Pydantic serializer warnings", category=UserWarning, module="pydantic")
 
 # Instrument LiteLLM for tracing if endpoint is configured
 _otel_endpoint = os.getenv("OTEL_COLLECTOR_ENDPOINT")

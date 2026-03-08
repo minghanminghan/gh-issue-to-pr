@@ -131,3 +131,5 @@ model:
     drop_params: true
     temperature: 0.0
     parallel_tool_calls: true
+    timeout: 120
+    num_retries: 5

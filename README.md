@@ -205,3 +205,53 @@ uv run pytest -v
 uv run pytest tests/test_tools.py -v
 uv run pytest tests/test_server.py -v
 ```
+
+---
+
+## Benchmarking (SWE-bench Verified)
+
+The benchmark runner evaluates the pipeline against [SWE-bench Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified). It requires Docker and the `benchmark` extra:
+
+```bash
+uv sync --extra benchmark
+```
+
+### Run the benchmark
+
+```bash
+uv run python src/benchmarks/benchmark.py [options]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--num-tasks N` | `10` | Number of tasks to run |
+| `--instance-ids ID …` | — | Run specific tasks by ID (overrides `--num-tasks`) |
+| `--model MODEL` | `$MODEL_NAME` | LiteLLM model name |
+| `--max-steps N` | — | Max agent steps per task |
+| `--max-workers N` | `4` | Docker eval parallelism |
+| `--cache-level LEVEL` | `env` | Docker image cache: `none`, `base`, `env`, `instance` |
+| `--output-dir PATH` | `benchmarks/results/<run_id>/` | Where to write results |
+| `--run-id ID` | timestamp | Run identifier |
+| `--skip-eval` | — | Write predictions without running the harness |
+
+```bash
+# Run 10 tasks with default settings
+uv run python src/benchmarks/benchmark.py
+
+# Run a specific task
+uv run python src/benchmarks/benchmark.py --instance-ids django__django-10097
+
+# Iterative dev: cache full Docker images so re-runs skip the build step (~30s saved per task)
+uv run python src/benchmarks/benchmark.py --instance-ids django__django-10097 --cache-level instance
+
+# Run 50 tasks with a specific model, 8 parallel Docker workers
+uv run python src/benchmarks/benchmark.py --num-tasks 50 --model openai/gpt-4o --max-workers 8
+```
+
+Results are written to `benchmarks/results/<run_id>/`:
+
+| File | Contents |
+|------|----------|
+| `predictions.jsonl` | One prediction per task (instance_id, model_patch, model_name_or_path) |
+| `results.json` | Harness evaluation output (resolved counts, resolved IDs) |
+| `summary.txt` | Human-readable summary printed at the end of the run |
