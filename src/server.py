@@ -76,7 +76,8 @@ def root() -> str:
   <title>gh-issue-to-pr</title>
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 
-  <style>body {
+  <style>
+    body {
       font-family: system-ui, -apple-system, sans-serif;
       max-width: 800px;
       margin: 2rem auto;
@@ -143,18 +144,23 @@ def root() -> str:
     }
     li span { font-weight: bold; color: #555; }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    .dark-mode { background-color: #121212; color: #e0e0e0; }
+    .dark-mode form { background-color: #1e1e1e; border-color: #333; }
+    .dark-mode input, .dark-mode textarea {
+      background-color: #2c2c2c;
+      color: #e0e0e0;
+      border-color: #444;
+    }
+    .dark-mode fieldset { border-color: #444; }
+    .dark-mode button { background-color: #0d6efd; }
+    .dark-mode button:hover { background-color: #0b5ed7; }
+    .dark-mode #jobs { border-color: #333; }
+    .dark-mode li { border-color: #333; }
+    .dark-mode li span { color: #bbb; }
+    .dark-mode a { color: #66b0ff; }
 
-    
+    @media (prefers-color-scheme: dark) {
+      body:not(.light-mode) { background-color: #121212; color: #e0e0e0; }
       body:not(.light-mode) form { background-color: #1e1e1e; border-color: #333; }
       body:not(.light-mode) input, body:not(.light-mode) textarea {
         background-color: #2c2c2c;
@@ -169,24 +175,7 @@ def root() -> str:
       body:not(.light-mode) li span { color: #bbb; }
       body:not(.light-mode) a { color: #66b0ff; }
     }
-
-@media (prefers-color-scheme: dark) {
-      body:not(.light-mode) { background-color: #121212; color: #e0e0e0; }
-
-.dark-mode { background-color: #121212; color: #e0e0e0; }
-.dark-mode form { background-color: #1e1e1e; border-color: #333; }
-.dark-mode input, .dark-mode textarea {
-      background-color: #2c2c2c;
-      color: #e0e0e0;
-      border-color: #444;
-    }
-.dark-mode fieldset { border-color: #444; }
-.dark-mode button { background-color: #0d6efd; }
-.dark-mode button:hover { background-color: #0b5ed7; }
-.dark-mode #jobs { border-color: #333; }
-.dark-mode li { border-color: #333; }
-.dark-mode li span { color: #bbb; }
-.dark-mode a { color: #66b0ff; }</style>
+  </style>
 
 </head>
 <body>
