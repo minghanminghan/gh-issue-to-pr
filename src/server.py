@@ -145,6 +145,10 @@ def root() -> str:
     li span { font-weight: bold; color: #555; }
 
     .dark-mode { background-color: #121212; color: #e0e0e0; }
+    .dark-mode h1 { color: #fff; }
+    .dark-mode label { color: #ccc; }
+    .dark-mode input::placeholder, .dark-mode textarea::placeholder { color: #888; }
+    .dark-mode legend { color: #bbb; }
     .dark-mode form { background-color: #1e1e1e; border-color: #333; }
     .dark-mode input, .dark-mode textarea {
       background-color: #2c2c2c;
@@ -161,6 +165,10 @@ def root() -> str:
 
     @media (prefers-color-scheme: dark) {
       body:not(.light-mode) { background-color: #121212; color: #e0e0e0; }
+      body:not(.light-mode) h1 { color: #fff; }
+      body:not(.light-mode) label { color: #ccc; }
+      body:not(.light-mode) input::placeholder, body:not(.light-mode) textarea::placeholder { color: #888; }
+      body:not(.light-mode) legend { color: #bbb; }
       body:not(.light-mode) form { background-color: #1e1e1e; border-color: #333; }
       body:not(.light-mode) input, body:not(.light-mode) textarea {
         background-color: #2c2c2c;
