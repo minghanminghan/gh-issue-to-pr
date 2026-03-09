@@ -164,24 +164,24 @@ def root() -> str:
     .dark-mode a { color: #66b0ff; }
 
     @media (prefers-color-scheme: dark) {
-      body:not(.light-mode) { background-color: #121212; color: #e0e0e0; }
-      body:not(.light-mode) h1 { color: #fff; }
-      body:not(.light-mode) label { color: #ccc; }
-      body:not(.light-mode) input::placeholder, body:not(.light-mode) textarea::placeholder { color: #888; }
-      body:not(.light-mode) legend { color: #bbb; }
-      body:not(.light-mode) form { background-color: #1e1e1e; border-color: #333; }
-      body:not(.light-mode) input, body:not(.light-mode) textarea {
+      body:not(.light-mode):not(.dark-mode) { background-color: #121212; color: #e0e0e0; }
+      body:not(.light-mode):not(.dark-mode) h1 { color: #fff; }
+      body:not(.light-mode):not(.dark-mode) label { color: #ccc; }
+      body:not(.light-mode):not(.dark-mode) input::placeholder, body:not(.light-mode):not(.dark-mode) textarea::placeholder { color: #888; }
+      body:not(.light-mode):not(.dark-mode) legend { color: #bbb; }
+      body:not(.light-mode):not(.dark-mode) form { background-color: #1e1e1e; border-color: #333; }
+      body:not(.light-mode):not(.dark-mode) input, body:not(.light-mode):not(.dark-mode) textarea {
         background-color: #2c2c2c;
         color: #e0e0e0;
         border-color: #444;
       }
-      body:not(.light-mode) fieldset { border-color: #444; }
-      body:not(.light-mode) button { background-color: #0d6efd; }
-      body:not(.light-mode) button:hover { background-color: #0b5ed7; }
-      body:not(.light-mode) #jobs { border-color: #333; }
-      body:not(.light-mode) li { border-color: #333; }
-      body:not(.light-mode) li span { color: #bbb; }
-      body:not(.light-mode) a { color: #66b0ff; }
+      body:not(.light-mode):not(.dark-mode) fieldset { border-color: #444; }
+      body:not(.light-mode):not(.dark-mode) button { background-color: #0d6efd; }
+      body:not(.light-mode):not(.dark-mode) button:hover { background-color: #0b5ed7; }
+      body:not(.light-mode):not(.dark-mode) #jobs { border-color: #333; }
+      body:not(.light-mode):not(.dark-mode) li { border-color: #333; }
+      body:not(.light-mode):not(.dark-mode) li span { color: #bbb; }
+      body:not(.light-mode):not(.dark-mode) a { color: #66b0ff; }
     }
   </style>
 
