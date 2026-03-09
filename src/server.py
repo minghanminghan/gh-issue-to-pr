@@ -84,6 +84,7 @@ def root() -> str:
       padding: 0 1rem;
       line-height: 1.5;
       color: #333;
+      transition: background-color 0.3s, color 0.3s;
     }
     form {
       display: flex;
@@ -106,6 +107,8 @@ def root() -> str:
       border: 1px solid #ccc;
       border-radius: 4px;
       font-size: 1rem;
+      background-color: #fff;
+      color: #333;
     }
     textarea { height: 100px; }
     fieldset {
@@ -140,26 +143,45 @@ def root() -> str:
       justify-content: space-between;
     }
     li span { font-weight: bold; color: #555; }
+
+    .dark-mode { background-color: #121212; color: #e0e0e0; }
+    .dark-mode form { background-color: #1e1e1e; border-color: #333; }
+    .dark-mode input, .dark-mode textarea {
+      background-color: #2c2c2c;
+      color: #e0e0e0;
+      border-color: #444;
+    }
+    .dark-mode fieldset { border-color: #444; }
+    .dark-mode button { background-color: #0d6efd; }
+    .dark-mode button:hover { background-color: #0b5ed7; }
+    .dark-mode #jobs { border-color: #333; }
+    .dark-mode li { border-color: #333; }
+    .dark-mode li span { color: #bbb; }
+    .dark-mode a { color: #66b0ff; }
+
     @media (prefers-color-scheme: dark) {
-      body { background-color: #121212; color: #e0e0e0; }
-      form { background-color: #1e1e1e; border-color: #333; }
-      input, textarea {
+      body:not(.light-mode) { background-color: #121212; color: #e0e0e0; }
+      body:not(.light-mode) form { background-color: #1e1e1e; border-color: #333; }
+      body:not(.light-mode) input, body:not(.light-mode) textarea {
         background-color: #2c2c2c;
         color: #e0e0e0;
         border-color: #444;
       }
-      fieldset { border-color: #444; }
-      button { background-color: #0d6efd; }
-      button:hover { background-color: #0b5ed7; }
-      #jobs { border-color: #333; }
-      li { border-color: #333; }
-      li span { color: #bbb; }
-      a { color: #66b0ff; }
+      body:not(.light-mode) fieldset { border-color: #444; }
+      body:not(.light-mode) button { background-color: #0d6efd; }
+      body:not(.light-mode) button:hover { background-color: #0b5ed7; }
+      body:not(.light-mode) #jobs { border-color: #333; }
+      body:not(.light-mode) li { border-color: #333; }
+      body:not(.light-mode) li span { color: #bbb; }
+      body:not(.light-mode) a { color: #66b0ff; }
     }
   </style>
 
 </head>
 <body>
+  <div style="display: flex; justify-content: flex-end;">
+    <button id="theme-toggle" onclick="toggleTheme()" style="padding: 0.5rem;">Toggle Theme</button>
+  </div>
   <h1>gh-issue-to-pr</h1>
 
   <section id="jobs" hx-get="/jobs" hx-trigger="load, every 3s" hx-swap="innerHTML">
@@ -184,6 +206,25 @@ def root() -> str:
   </form>
 
   <script>
+    function toggleTheme() {
+      const body = document.body;
+      if (body.classList.contains("dark-mode")) {
+        body.classList.remove("dark-mode");
+        body.classList.add("light-mode");
+        localStorage.setItem("theme", "light");
+      } else {
+        body.classList.remove("light-mode");
+        body.classList.add("dark-mode");
+        localStorage.setItem("theme", "dark");
+      }
+    }
+
+    // Apply saved theme on load
+    const savedTheme = localStorage.getItem("theme");
+    if (savedTheme) {
+      document.body.classList.add(savedTheme + "-mode");
+    }
+
     const form = document.getElementById("submit-form");
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -205,7 +246,7 @@ def root() -> str:
     });
   </script>
 </body>
-</html>"""
+</html>
 
 
 
