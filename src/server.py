@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 import tempfile
 import threading
@@ -9,7 +12,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -42,6 +45,7 @@ class IssueRequest(BaseModel):
     max_steps: int | None = Field(default=None, gt=0)
     model_api_key: str | None = None
     model_endpoint: str | None = None
+    ci_retries: int | None = Field(default=None, ge=0)
 
 
 class AcceptedResponse(BaseModel):
@@ -309,6 +313,56 @@ def get_status(issue_url: str) -> StatusResponse:
 
 
 # ---------------------------------------------------------------------------
+# GitHub webhook endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.post("/webhook/github")
+async def github_webhook(request: Request) -> dict:
+    """Receive GitHub issue/comment events and trigger the pipeline."""
+    body = await request.body()
+
+    # Verify HMAC-SHA256 signature
+    secret = os.environ.get("WEBHOOK_SECRET", "")
+    if secret:
+        sig_header = request.headers.get("X-Hub-Signature-256", "")
+        expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig_header, expected):
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+    event = request.headers.get("X-GitHub-Event", "")
+    payload = json.loads(body)
+
+    webhook_label = os.environ.get("WEBHOOK_LABEL", "agent")
+    on_open = os.environ.get("WEBHOOK_ON_OPEN", "false") == "true"
+    on_comment = os.environ.get("WEBHOOK_ON_COMMENT", "false") == "true"
+
+    issue_url: str | None = None
+
+    if event == "issues":
+        action = payload.get("action", "")
+        issue = payload.get("issue", {})
+        if action == "labeled":
+            label_name = payload.get("label", {}).get("name", "")
+            if not webhook_label or label_name == webhook_label:
+                issue_url = issue.get("html_url")
+        elif action == "opened" and on_open:
+            issue_url = issue.get("html_url")
+    elif event == "issue_comment" and on_comment:
+        action = payload.get("action", "")
+        comment_body = payload.get("comment", {}).get("body", "")
+        if action == "created" and comment_body.startswith("/fix"):
+            issue_url = payload.get("issue", {}).get("html_url")
+
+    if not issue_url:
+        return {"status": "ignored"}
+
+    log.info(f"Webhook triggered pipeline for: {issue_url}")
+    submit_issue(IssueRequest(issue_url=issue_url))
+    return {"status": "accepted", "issue_url": issue_url}
+
+
+# ---------------------------------------------------------------------------
 # Background job runner
 # ---------------------------------------------------------------------------
 
@@ -354,6 +408,7 @@ def _run_pipeline_job(req: IssueRequest) -> None:
             budget=req.budget,
             model_api_key=req.model_api_key,
             model_endpoint=req.model_endpoint,
+            ci_retries=req.ci_retries,
         )
         log.debug(f"run_pipeline completed: outcome={outcome!r}, finish_reason={finish_reason!r}")
     except SystemExit:

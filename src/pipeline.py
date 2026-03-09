@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import sys
 import platform
 import subprocess
@@ -48,7 +50,32 @@ def _get_config_for_os() -> dict:
     return get_config_from_spec(Path(__file__).parent / config_file)
 
 
+_DEFAULT_CI_RETRIES = 3
+_DEFAULT_BUDGET_USD = 2.0
+
 MODEL_NAME = os.getenv("MODEL_NAME")
+
+
+def _env_int(key: str) -> int | None:
+    val = os.getenv(key)
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except ValueError:
+        log.warning(f"Invalid value for env var {key}={val!r}; ignoring")
+        return None
+
+
+def _env_float(key: str) -> float | None:
+    val = os.getenv(key)
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        log.warning(f"Invalid value for env var {key}={val!r}; ignoring")
+        return None
 if not MODEL_NAME:
     raise ValueError("MODEL_NAME environment variable not set")
 
@@ -62,6 +89,8 @@ def run_pipeline(
     budget: float | None = None,
     model_api_key: str | None = None,
     model_endpoint: str | None = None,
+    cache: bool = False,
+    ci_retries: int | None = None,
 ) -> tuple[str, str]:
     """
     Main pipeline entry point.
@@ -89,32 +118,61 @@ def run_pipeline(
     issue = run_setup(issue_url, local_path=local_path)
     log.debug("Setup complete")
 
+    # Resolve config precedence: cli/api value > env var > hardcoded default
+    resolved_max_steps = max_steps if max_steps is not None else _env_int("MAX_STEPS")
+    env_budget = _env_float("PIPELINE_BUDGET")
+    resolved_budget = budget if budget is not None else (env_budget if env_budget is not None else _DEFAULT_BUDGET_USD)
+    env_ci_retries = _env_int("CI_RETRIES")
+    resolved_ci_retries = ci_retries if ci_retries is not None else (env_ci_retries if env_ci_retries is not None else _DEFAULT_CI_RETRIES)
+    log.debug(f"Resolved config: max_steps={resolved_max_steps!r}, budget={resolved_budget!r}, ci_retries={resolved_ci_retries!r}")
+
     agent_config = AgentConfig(
         model_name=model_name,
-        max_steps=max_steps,
-        budget=budget,
+        max_steps=resolved_max_steps,
+        budget=resolved_budget,
         model_api_key=model_api_key,
         model_endpoint=model_endpoint,
+        ci_retries=resolved_ci_retries,
     )
     log.debug(f"AgentConfig created: {dict(agent_config)}")
+    max_ci_retries = resolved_ci_retries
     outcome = "fail"
     reason = "unknown"
+    pr_url: str | None = None
     try:
-        outcome, reason = _run_pipeline_steps(issue, guidelines, agent_config)
-        log.debug(f"Pipeline steps finished with outcome={outcome!r}, reason={reason!r}")
-        if outcome == "pass":
-            pr_url = _push_pr(issue)
+        ci_feedback: str | None = None
+        for ci_attempt in range(max_ci_retries + 1):
+            if ci_attempt > 0:
+                log.info(f"Re-running agent to fix CI failure (attempt {ci_attempt + 1}/{max_ci_retries + 1})")
+            outcome, reason = _run_pipeline_steps(issue, guidelines, agent_config, ci_feedback=ci_feedback)
+            log.debug(f"Pipeline steps finished: outcome={outcome!r}, reason={reason!r}")
+            if outcome != "pass":
+                break  # agent hit limits or errored; don't retry
+            pr_url = _push_pr(issue, existing_pr_url=pr_url)
             log.debug(f"PR created/updated: {pr_url}")
-            _watch_ci(issue, pr_url)
+            ci_passed, ci_feedback = _watch_ci(issue, pr_url)
+            if ci_passed:
+                break
+            if ci_attempt < max_ci_retries:
+                _post_pr_comment(pr_url, issue["dir"], f"CI failed — retrying with agent (attempt {ci_attempt + 2}/{max_ci_retries + 1}).")
+            else:
+                log.warning(f"CI still failing after {max_ci_retries} retries; giving up")
+                _post_pr_comment(pr_url, issue["dir"], "CI is still failing after maximum retries. Manual review needed.")
     except Exception as e:
-        log.debug(f"Pipeline steps raised exception: {e!r}")
+        log.debug(f"Pipeline raised exception: {e!r}")
     finally:
         _run_report(issue, outcome, agent_config)
+
+    if outcome == "pass" and not cache and local_path is None:
+        run_dir = issue["dir"]
+        shutil.rmtree(run_dir, ignore_errors=True)
+        log.info(f"Deleted run directory: {run_dir}")
     return outcome, reason
 
 
 def _run_pipeline_steps(
-    issue: Issue, guidelines: str, agent_config: AgentConfig | dict[str, Any]
+    issue: Issue, guidelines: str, agent_config: AgentConfig | dict[str, Any],
+    ci_feedback: str | None = None,
 ) -> tuple[str, str]:
     """Inner pipeline loop using mini-swe-agent. Returns (outcome, reason)."""
 
@@ -167,6 +225,13 @@ def _run_pipeline_steps(
             log.debug("Injecting guidelines into prompt")
             prompt.append(f"\nContribution guidelines:\n{guidelines}")
 
+        if ci_feedback:
+            log.debug("Injecting CI failure feedback into prompt")
+            prompt.append(
+                f"\nThe previous changes you made caused CI to fail. "
+                f"Fix the code to make CI pass. CI failure details:\n{ci_feedback}"
+            )
+
         full_prompt = "\n".join(prompt)
         log.debug(f"Prompt assembled: {len(full_prompt)} chars total")
 
@@ -185,22 +250,26 @@ def _run_pipeline_steps(
 
     except Exception as e:
         log.error(f"Agent execution failed: {e}", exc_info=True)
-        log.debug(f"Agent failure details: type={type(e).__name__}, args={e.args!r}")
-        # log_event(run_dir, "agent_failure", {"error": str(e)})
+        log.debug(f"Agent fail details: type={type(e).__name__}, args={e.args!r}")
+        # log_event(run_dir, "agent_fail", {"error": str(e)})
         return "fail", "exception"
 
 
-def _push_pr(issue: Issue) -> str:
+def _push_pr(issue: Issue, existing_pr_url: str | None = None) -> str:
     repo_dir = issue["dir"]
 
-    # Push branch
-    push = subprocess.run(
-        ["git", "push", "origin", "HEAD"],
-        cwd=repo_dir, capture_output=True, text=True,
-    )
+    # On retry the agent may have amended commits, so use --force-with-lease
+    push_cmd = ["git", "push", "origin", "HEAD"]
+    if existing_pr_url:
+        push_cmd.append("--force-with-lease")
+    push = subprocess.run(push_cmd, cwd=repo_dir, capture_output=True, text=True)
     if push.returncode != 0:
         raise RuntimeError(f"git push failed: {push.stderr}")
     log.debug("Branch pushed")
+
+    if existing_pr_url:
+        log.debug(f"Updated existing PR: {existing_pr_url}")
+        return existing_pr_url
 
     # If it is a PR, comment on it.
     if "/pull/" in issue["url"]:
@@ -236,34 +305,75 @@ def _post_pr_comment(pr_url: str, repo_dir: Path, comment: str) -> None:
         log.error(f"gh pr comment failed: {pr.stderr}")
 
 
-def _watch_ci(issue: Issue, pr_url: str) -> None:
+def _watch_ci(issue: Issue, pr_url: str) -> tuple[bool, str]:
+    """Watch CI and return (passed, failure_details)."""
     repo_dir = issue["dir"]
     log.info(f"Watching CI status for PR: {pr_url}")
-    
-    # Run checks and watch
+
     result = subprocess.run(
         ["gh", "pr", "checks", pr_url, "--watch"],
-        cwd=repo_dir, capture_output=True, text=True
+        cwd=repo_dir, capture_output=True, text=True,
     )
-    
+
     if result.returncode == 0:
         log.info("CI passed!")
-    else:
-        log.error("CI failed!")
-        # Get failed checks
-        failed_checks_result = subprocess.run(
-            ["gh", "pr", "checks", pr_url, "--json", "name,state", "--jq", '.[] | select(.state=="fail") | .name'],
-            cwd=repo_dir, capture_output=True, text=True
+        return True, ""
+
+    log.error("CI failed!")
+    failure_details = _get_ci_failure_details(pr_url, repo_dir)
+    return False, failure_details
+
+
+def _get_ci_failure_details(pr_url: str, repo_dir: Path) -> str:
+    """Return a summary of failed CI checks and their log output."""
+    parts: list[str] = []
+
+    # Failed check names
+    checks_result = subprocess.run(
+        ["gh", "pr", "checks", pr_url, "--json", "name,state"],
+        cwd=repo_dir, capture_output=True, text=True,
+    )
+    if checks_result.returncode == 0:
+        try:
+            checks = json.loads(checks_result.stdout)
+            failed = [
+                c["name"] for c in checks
+                if c.get("state") in ("FAILURE", "fail", "failure", "ERROR", "error")
+            ]
+            if failed:
+                parts.append("Failed checks: " + ", ".join(failed))
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Failed job log output via HEAD commit SHA
+    sha_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_dir, capture_output=True, text=True,
+    )
+    if sha_result.returncode == 0:
+        sha = sha_result.stdout.strip()
+        run_list = subprocess.run(
+            ["gh", "run", "list", "--commit", sha, "--limit", "1", "--json", "databaseId"],
+            cwd=repo_dir, capture_output=True, text=True,
         )
-        
-        failed_checks = failed_checks_result.stdout.strip().split("\n")
-        failed_checks = [c for c in failed_checks if c]
-        
-        if failed_checks:
-            comment = f"The following CI checks failed: {', '.join(failed_checks)}. Please check the logs."
-            _post_pr_comment(pr_url, repo_dir, comment)
-        else:
-            _post_pr_comment(pr_url, repo_dir, "CI failed (some checks might be canceled or failed). Please check the logs.")
+        if run_list.returncode == 0:
+            try:
+                runs = json.loads(run_list.stdout)
+                if runs:
+                    run_id = runs[0]["databaseId"]
+                    log_result = subprocess.run(
+                        ["gh", "run", "view", str(run_id), "--log-failed"],
+                        cwd=repo_dir, capture_output=True, text=True,
+                    )
+                    if log_result.returncode == 0 and log_result.stdout.strip():
+                        output = log_result.stdout
+                        if len(output) > 8000:
+                            output = "...(truncated)...\n" + output[-8000:]
+                        parts.append(f"Failed job logs:\n{output}")
+            except (json.JSONDecodeError, KeyError, IndexError):
+                pass
+
+    return "\n\n".join(parts) if parts else "CI checks failed (no details available)"
 
 
 def _run_report(
@@ -272,5 +382,5 @@ def _run_report(
     run_dir = issue["dir"]
     close_trace(run_dir, outcome, issue["url"], agent_config)
 
-    if outcome == "failure":
+    if outcome == "fail":
         sys.exit(1)

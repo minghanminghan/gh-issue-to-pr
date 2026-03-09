@@ -9,3 +9,4 @@ class AgentConfig(TypedDict):
     budget: float | None
     model_api_key: str | None
     model_endpoint: str | None
+    ci_retries: int | None  # max CI retry attempts; None means use pipeline default
