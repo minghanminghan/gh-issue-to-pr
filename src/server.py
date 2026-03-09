@@ -77,19 +77,85 @@ def root() -> str:
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #333; }
-    form { display: flex; flex-direction: column; gap: 1rem; margin-top: 2rem; border: 1px solid #ddd; padding: 1.5rem; border-radius: 8px; background-color: #f9f9f9; }
-    label { display: flex; flex-direction: column; gap: 0.25rem; font-weight: 500; }
-    input, textarea { padding: 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      line-height: 1.5;
+      color: #333;
+    }
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      margin-top: 2rem;
+      border: 1px solid #ddd;
+      padding: 1.5rem;
+      border-radius: 8px;
+      background-color: #f9f9f9;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      font-weight: 500;
+    }
+    input, textarea {
+      padding: 0.6rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
     textarea { height: 100px; }
-    fieldset { border: 1px solid #ddd; padding: 1rem; border-radius: 4px; margin-top: 1rem; }
+    fieldset {
+      border: 1px solid #ddd;
+      padding: 1rem;
+      border-radius: 4px;
+      margin-top: 1rem;
+    }
     legend { font-weight: bold; padding: 0 0.5rem; }
-    button { padding: 0.75rem; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; font-weight: bold; margin-top: 1rem; }
+    button {
+      padding: 0.75rem;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: bold;
+      margin-top: 1rem;
+    }
     button:hover { background-color: #0056b3; }
-    #jobs { margin-bottom: 2rem; border-bottom: 2px solid #eee; padding-bottom: 1rem; }
+    #jobs {
+      margin-bottom: 2rem;
+      border-bottom: 2px solid #eee;
+      padding-bottom: 1rem;
+    }
     ul { padding: 0; list-style: none; }
-    li { padding: 0.5rem; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+    li {
+      padding: 0.5rem;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+    }
     li span { font-weight: bold; color: #555; }
+    @media (prefers-color-scheme: dark) {
+      body { background-color: #121212; color: #e0e0e0; }
+      form { background-color: #1e1e1e; border-color: #333; }
+      input, textarea {
+        background-color: #2c2c2c;
+        color: #e0e0e0;
+        border-color: #444;
+      }
+      fieldset { border-color: #444; }
+      button { background-color: #0d6efd; }
+      button:hover { background-color: #0b5ed7; }
+      #jobs { border-color: #333; }
+      li { border-color: #333; }
+      li span { color: #bbb; }
+      a { color: #66b0ff; }
+    }
   </style>
 
 </head>
@@ -118,24 +184,29 @@ def root() -> str:
   </form>
 
   <script>
-    const form = document.getElementById('submit-form');
-    form.addEventListener('submit', async (e) => {
+    const form = document.getElementById("submit-form");
+    form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const raw = Object.fromEntries(new FormData(form));
       const data = {};
       for (const [k, v] of Object.entries(raw)) {
-        if (v === '') continue;
-        if (k === 'max_steps') data[k] = parseInt(v, 10);
-        else if (k === 'budget') data[k] = parseFloat(v);
+        if (v === "") continue;
+        if (k === "max_steps") data[k] = parseInt(v, 10);
+        else if (k === "budget") data[k] = parseFloat(v);
         else data[k] = v;
       }
-      await fetch('/issue', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
+      await fetch("/issue", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(data)
+      });
       form.reset();
-      htmx.trigger('#jobs', 'load');
+      htmx.trigger("#jobs", "load");
     });
   </script>
 </body>
 </html>"""
+
 
 
 @app.get("/health")
@@ -154,7 +225,11 @@ def submit_issue(req: IssueRequest) -> AcceptedResponse:
     """
     issue_url = req.issue_url
     log.debug(
-        f"POST /issue: issue_url={issue_url!r}, model_name={req.model_name!r}, max_steps={req.max_steps!r}, local_path={req.local_path!r}, budget={req.budget!r}"
+        f"POST /issue: issue_url={issue_url!r}, "
+        f"model_name={req.model_name!r}, "
+        f"max_steps={req.max_steps!r}, "
+        f"local_path={req.local_path!r}, "
+        f"budget={req.budget!r}"
     )
     status_url = f"/status?issue_url={issue_url}"
 
