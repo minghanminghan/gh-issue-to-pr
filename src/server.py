@@ -86,6 +86,18 @@ def root() -> str:
     ul { padding: 0; list-style: none; }
     li { padding: 0.5rem; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
     li span { font-weight: bold; color: #555; }
+    @media (prefers-color-scheme: dark) {
+      body { background-color: #121212; color: #e0e0e0; }
+      form { background-color: #1e1e1e; border-color: #333; }
+      input, textarea { background-color: #2c2c2c; color: #e0e0e0; border-color: #444; }
+      fieldset { border-color: #444; }
+      button { background-color: #0d6efd; }
+      button:hover { background-color: #0b5ed7; }
+      #jobs { border-color: #333; }
+      li { border-color: #333; }
+      li span { color: #bbb; }
+      a { color: #66b0ff; }
+    }
   </style>
 
 </head>
