@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 import tools.log  # configures logging before any other import
-from pipeline import run_pipeline
+from pipeline import run_pipeline, _DEFAULT_CI_RETRIES, _DEFAULT_BUDGET_USD
 
 log = tools.log.get_logger(__name__)
 
@@ -34,7 +34,9 @@ def _run_subcommand(args: argparse.Namespace) -> None:
             local_path=args.local_path,
             model_name=args.model_name,
             max_steps=args.max_steps,
+            budget=args.budget,
             cache=args.cache,
+            ci_retries=args.ci_retries,
         )
         log.debug("\nPipeline completed.")
     except SystemExit as e:
@@ -272,14 +274,21 @@ Examples:
     run_parser.add_argument(
         "--budget",
         type=float,
-        default=2.00,
+        default=None,
         metavar="USD",
-        help="Cost budget in USD (default: 2.00)",
+        help=f"Cost budget in USD (default: ${_DEFAULT_BUDGET_USD:.2f}, or $PIPELINE_BUDGET env var)",
     )
     run_parser.add_argument(
         "--cache",
         action="store_true",
         help="Keep the cloned run/<hash> directory after the PR is pushed (default: delete it)",
+    )
+    run_parser.add_argument(
+        "--ci-retries",
+        type=int,
+        default=None,
+        metavar="N",
+        help=f"Max times to re-run the agent after CI failure (default: {_DEFAULT_CI_RETRIES})",
     )
     run_parser.set_defaults(func=_run_subcommand)
 

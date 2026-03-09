@@ -53,6 +53,7 @@ python src/main.py run <issue_url> <repo_url> [options]
 | `--config FILE` | No | Path to mini-swe-agent configuration YAML file |
 | `--budget USD` | No | Cost cap in USD (default: `2.00`) |
 | `--cache` | No | Keep the cloned `run/<hash>` directory after the PR is pushed (default: delete it) |
+| `--ci-retries N` | No | Max times to re-run the agent after CI failure (default: `3`) |
 
 ```bash
 # Clone the repo automatically and run the pipeline
@@ -160,6 +161,7 @@ If a job for the same `issue_url` is already queued or running, the server retur
 | `guidelines` | string | No | Contribution guidelines as an inline string |
 | `config` | string | No | Path to a custom agent configuration YAML file |
 | `budget` | float | No | Cost cap in USD (default: `2.00`, must be > 0) |
+| `ci_retries` | int | No | Max times to re-run the agent after CI failure (default: `3`, must be ≥ 0) |
 
 **Response body (202):**
 
@@ -252,6 +254,31 @@ By default the cloned repo inside `run/<hash>/` is deleted after the PR is succe
 |------|-----------|----------|
 | `TRACE.json` | Report | Full observability trace: all spans, tokens, cost, outcome |
 | `RUN.log` | All steps | JSON-lines event log written continuously throughout the run |
+
+---
+
+## Configuration
+
+### Precedence
+
+Configuration values are resolved in the following order (highest priority wins):
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 4 — highest | HTTP API request body | `{"budget": 5.0}` |
+| 3 | CLI arguments | `--budget 5.0` |
+| 2 | Environment variables | `PIPELINE_BUDGET=5.0` |
+| 1 — lowest | Hardcoded defaults | `2.0` USD |
+
+### Environment variables
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `MODEL_NAME` | string | *(required)* | LiteLLM model name (e.g. `anthropic/claude-sonnet-4-6`) |
+| `PIPELINE_BUDGET` | float | `2.0` | Cost cap in USD per pipeline run |
+| `MAX_STEPS` | int | mini-swe-agent default | Maximum agent steps per run |
+| `CI_RETRIES` | int | `3` | Max times to re-run the agent after CI failure |
+| `WEBHOOK_SECRET` | string | *(required for webhook)* | HMAC secret for GitHub webhook signature verification |
 
 ---
 

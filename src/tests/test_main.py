@@ -15,6 +15,7 @@ def test_run_subcommand_invalid_url():
         model_name=None,
         max_steps=None,
         budget=2.0,
+        ci_retries=None,
     )
     with pytest.raises(SystemExit) as exc:
         _run_subcommand(args)
@@ -29,6 +30,7 @@ def test_run_subcommand_invalid_local_path():
         model_name=None,
         max_steps=None,
         budget=2.0,
+        ci_retries=None,
     )
     with pytest.raises(SystemExit) as exc:
         _run_subcommand(args)
@@ -43,6 +45,7 @@ def test_run_subcommand_invalid_guidelines(tmp_path):
         model_name=None,
         max_steps=None,
         budget=2.0,
+        ci_retries=None,
     )
     with pytest.raises(SystemExit) as exc:
         _run_subcommand(args)
@@ -51,7 +54,7 @@ def test_run_subcommand_invalid_guidelines(tmp_path):
 
 @patch("main.run_pipeline")
 def test_run_subcommand_success(mock_run_pipeline, tmp_path):
-    mock_run_pipeline.return_value = tmp_path / "run_dir"
+    mock_run_pipeline.return_value = ("pass", "submitted")
 
     guideline_path = tmp_path / "repo" / "CONTRIBUTING.md"
     guideline_path.parent.mkdir()
@@ -65,6 +68,7 @@ def test_run_subcommand_success(mock_run_pipeline, tmp_path):
         max_steps=10,
         budget=5.0,
         cache=False,
+        ci_retries=2,
     )
 
     _run_subcommand(args)
@@ -75,7 +79,9 @@ def test_run_subcommand_success(mock_run_pipeline, tmp_path):
         local_path=str(tmp_path),
         model_name=None,
         max_steps=10,
+        budget=5.0,
         cache=False,
+        ci_retries=2,
     )
 
 
